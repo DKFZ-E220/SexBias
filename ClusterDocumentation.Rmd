@@ -1,0 +1,133 @@
+---
+title: "General Cluster Documentation"
+author: "Cristina Conde Lopez"
+date: "10/26/2021"
+output: html_document
+---
+
+**Using the Cluster**
+
+# Useful commands:
+
+![](commands.png)
+
+Other commands used quite frequently:
+- **mv**: to move files from one directory to other, path of the file + path for it to go.
+- **cp**: to copy files from one directory to other, path of the file + path for it to go.
+  - **cp -R** to copy directories from one direction to another, path of the directory + path of the new directory
+- **cd ~** : the worm after cd brings you to your home directory.
+- **module avail**: showing which packages the ODCF has available.
+- **module load/unload**: loading/unloading packages from the ones that are already in the environment.
+- **--help**: using --help after any other command is really useful because it gets you all the information for the command.
+- **which** followed by the name of a program.
+  - Version of the program installed in the environment.
+  - Source of the program so it's easier to find.
+- **vim** followed by a filename: lets you open files on the terminal. Once the file is open:
+  - Press -i (for insert) and modify the document.
+  - To quit press esc, then shift and :, if you have written on the document then write w followed by q. Example:
+  
+  ![](Example_vim.png)
+# Running jobs in the cluster
+
+To run jobs in the cluster you need to first register using the following commands:
+
+- **ssh odcf-worker01**: entering the working environment in which you can work and run jobs.
+
+
+Submitting a job to the cluster so it works. It first has to have the following header:
+
+```{r eval=FALSE}
+#!/software/r/3.5.2/bin/Rscript (here you select the root of the program needed)
+#BSUB -q short (here you can select which queue you want to use)
+#BSUB -R "rusage[mem=MEM]" (select how much memory you need for your job)
+#BSUB -W 0:10 (select how much time)
+#BSUB -n 2 (select how many nodes)
+#BSUB -R span[hosts=1]
+#BSUB -J rscript_01 (select the name of the job)
+#BSUB -u w.hadiwikarta@dkfz.de (your email address so you get a notification)
+```
+
+![Qeues available](Queus.png)
+
+Afterwards you just write the code needed for the job, it can be in any language but first you need to specify the programs being used for this. This is done in the first line of the header:
+
+- For R scripts: **#!/software/r/3.5.2/bin/Rscript**
+- For other programs: **/bin/sh**, but then you have to call the program specifically inside of the script. You can do that using module load if the program is inside the environment.
+
+All the packages installed need to be installed in the home directory. Example for installing HTSeq, the library numpy has to be installed. Look for the source directory of the installed package so it can run.
+
+```{r eval=FALSE}
+pip3 install --user HTSeq
+```
+
+The directory of the HTSeq-count tool is ~/.local/bin, from there you can get it to work.
+
+Examples of simple scripts tried:
+
+```{r eval=FALSE}
+## This makes a directory in the home directory called hello
+
+#!/bin/sh
+#BSUB -q short
+#BSUB -W 0:10 
+#BSUB -n 2 
+#BSUB -R span[hosts=1]
+#BSUB -R "rusage[mem=1G]" 
+#BSUB -J testfile
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de 
+cd ~
+mkdir hello
+```
+
+You can also connect an script with the program you want to run it with, for example, if we want to run some code in Python first we simply write the script:
+
+```{r eval=FALSE}
+import numpy
+3+3
+quit()
+```
+
+Then we create a new script calling python and the script with the code and format it to submit to the cluster:
+
+```{r eval=FALSE}
+#!/bin/sh
+#BSUB -q short
+#BSUB -W 0:10 
+#BSUB -n 2 
+#BSUB -R span[hosts=1]
+#BSUB -R "rusage[mem=1G]" 
+#BSUB -J testfile
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de 
+
+/software/python/3.7.0/bin/python3 /home/c581z/R/suma.py
+```
+
+Example of simple code for R:
+
+```{r eval=FALSE}
+#!/software/r/3.5.2/bin/Rscript
+#BSUB -q short
+#BSUB -W 0:10 
+#BSUB -n 2 
+#BSUB -R span[hosts=1]
+#BSUB -R "rusage[mem=1G]" 
+#BSUB -J mtcars
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de 
+
+data("mtcars")
+write.csv(mtcars, file = "/home/c581z/R/mtcars.cvs") # <- (insert the name of your
+# R folder in home directory)
+```
+
+You should get a cvs file with the mtcars data on your R directory.
+
+To submit a job into the cluster we use bsub:
+
+```{r eval=FALSE}
+bsub < nameofthefile.whatever
+```
+
+Once the job is running in the cluster we can look at it progress with the command **bjobs**.
+
+
+

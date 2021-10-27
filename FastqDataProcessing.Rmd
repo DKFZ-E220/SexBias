@@ -1,0 +1,67 @@
+---
+title: "Fastq file Processing"
+author: "Cristina Conde Lopez"
+date: "10/26/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Getting started
+
+For this job we are going to use the Cluster offered by the ODCF in the DKFZ research center. This Cluster can be accessed through the JupyterLab platform offered by the OCDF. For more about how to get the environment ready to work, please refer to the Cluster General Documentation document.
+
+Before beginning is better to make sure the analysis directory, which means the directory that is going to contain all your data and future analysis, has a comprehensible structure. In our case it follows this patter:
+
+analysis folder:
+  - dataset folder (which conteins the raw data)
+  - result folder (which has subfolders containing the different results of the analysis)
+  - source (which contains all the scripts used for this analysis)
+
+## Fastq file data processing
+
+### Fastqc 
+
+In first place, we are going to use the program fastqc for  some quality control checks on raw sequence data. For more information on fastqc, please refer to the following link: https://www.bioinformatics.babraham.ac.uk/projects/fastqc/INSTALL.txt
+
+Fastqc is a package available on the ODCF environment, so it just need to be loaded to work. For this we first use the command:
+
+```{r eval=FALSE}
+module load fastqc/0.11.5
+```
+
+Using *fastqc --help* gives us all the information on the fastqc parameters so we can stablish the ones needed for our job. For this processing we are going to use the following script:
+
+```{r eval=FALSE}
+#!/bin/sh
+#BSUB -q long
+#BSUB -W 07:00 
+#BSUB -n 3
+#BSUB -R span[hosts=1]
+#BSUB -R "rusage[mem=50G]" 
+#BSUB -J FastqcAnalysis
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de 
+
+cd /omics/odcf/analysis/OE0509_projects/hnscc/dataset # first we establish the
+# directory of the files to process
+
+# Then we call the fastqc function
+fastqc # here we insert the names of our samples, for example: 
+18134R-91-01_S77_L002_R1_001.fastq.gz 18134R-91-01_S77_L002_R2_001.fastq.gz 18134R-91-02_S78_L002_R1_001.fastq.gz 18134R-91-02_S78_L002_R2_001.fastq.gz 18134R-91-03_S79_L002_R1_001.fastq.gz 18134R-91-03_S79_L002_R2_001.fastq.gz 18134R-91-04_S80_L002_R1_001.fastq.gz 18134R-91-04_S80_L002_R2_001.fastq.gz 18134R-91-05_S81_L002_R1_001.fastq.gz 18134R-91-05_S81_L002_R2_001.fastq.gz 18134R-91-06_S82_L002_R1_001.fastq.gz 18134R-91-06_S82_L002_R2_001.fastq.gz 18134R-91-07_S83_L002_R1_001.fastq.gz 18134R-91-07_S83_L002_R2_001.fastq.gz 18134R-91-08_S84_L002_R1_001.fastq.gz 18134R-91-08_S84_L002_R2_001.fastq.gz 18134R-91-09_S85_L002_R1_001.fastq.gz 18134R-91-09_S85_L002_R2_001.fastq.gz 18134R-91-10_S86_L002_R1_001.fastq.gz 18134R-91-10_S86_L002_R2_001.fastq.gz 18134R-91-11_S0_L001_R1_001.fastq.gz 18134R-91-11_S0_L001_R2_001.fastq.gz 18134R-91-12_S0_L001_R1_001.fastq.gz 18134R-91-12_S0_L001_R2_001.fastq.gz 18134R-91-13_S89_L002_R1_001.fastq.gz 18134R-91-13_S89_L002_R2_001.fastq.gz 18134R-91-14_S0_L001_R1_001.fastq.gz 18134R-91-14_S0_L001_R2_001.fastq.gz 18134R-91-15_S0_L001_R1_001.fastq.gz 18134R-91-15_S0_L001_R2_001.fastq.gz 18134R-91-16_S92_L002_R1_001.fastq.gz 18134R-91-16_S92_L002_R2_001.fastq.gz 18134R-91-17_S0_L001_R1_001.fastq.gz 18134R-91-17_S0_L001_R2_001.fastq.gz 
+# then we can select the directory in which we want the results:
+--outdir /omics/odcf/analysis/OE0509_projects/hnscc/results/fastqc
+```
+
+Once we have run this script we obtain the results as a html file and zip file per sample, for interpretation of this results please refer to the following links:
+
+https://hbctraining.github.io/Intro-to-rnaseq-hpc-salmon/lessons/qc_fastqc_assessment.html
+https://www.bioinformatics.babraham.ac.uk/projects/fastqc/Help/3%20Analysis%20Modules/
+
+
+
+
+
+
+
