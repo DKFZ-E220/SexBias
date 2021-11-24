@@ -1,8 +1,15 @@
 ---
-title: "Fastq file Processing"
-author: "Cristina Conde Lopez"
-date: "10/26/2021"
-output: html_document
+title: "Fastq File Processing"
+author: "Cristina Conde López"
+date: "`r Sys.Date()`"
+output: 
+ prettydoc::html_pretty:
+    toc: true
+    theme: hpstr
+    highlight: github
+    number_sections: true
+editor_options: 
+  chunk_output_type: inline
 ---
 
 ```{r setup, include=FALSE}
@@ -15,21 +22,27 @@ For this job we are going to use the Cluster offered by the ODCF in the DKFZ res
 
 Before beginning is better to make sure the analysis directory, which means the directory that is going to contain all your data and future analysis, has a comprehensible structure. In our case it follows this patter:
 
-analysis folder:
-  - dataset folder (which conteins the raw data)
-  - result folder (which has subfolders containing the different results of the analysis)
-  - source (which contains all the scripts used for this analysis)
+- **Analysis folder**:
+  - **Dataset folder** (which conteins the raw data)    
+  - **Result folder** (which has subfolders containing the different results of the analysis)
+  - **Scripts folder** (which contains all the scripts used for this analysis)
 
-## Fastq file data processing
+# Fastq file data processing
 
-### Fastqc 
+## Fastqc - Quality Control of the Raw Data
 
-In first place, we are going to use the program fastqc for  some quality control checks on raw sequence data. For more information on fastqc, please refer to the following link: https://www.bioinformatics.babraham.ac.uk/projects/fastqc/INSTALL.txt
+In first place, we are going to use the program fastqc for some quality control checks on raw sequencing data. For more information on fastqc, please refer to the following link: https://www.bioinformatics.babraham.ac.uk/projects/fastqc/INSTALL.txt
 
 Fastqc is a package available on the ODCF environment, so it just need to be loaded to work. For this we first use the command:
 
 ```{r eval=FALSE}
 module load fastqc/0.11.5
+```
+
+We have generated a directory inside the *results* directory for the storage of all the data produced from fastqc. For this we use the following command once we're inside the *results* directory:
+
+```{r eval=FALSE}
+mkdir fastqc
 ```
 
 Using *fastqc --help* gives us all the information on the fastqc parameters so we can stablish the ones needed for our job. For this processing we are going to use the following script:
@@ -47,6 +60,8 @@ Using *fastqc --help* gives us all the information on the fastqc parameters so w
 cd /omics/odcf/analysis/OE0509_projects/hnscc/dataset # first we establish the
 # directory of the files to process
 
+module load fastqc/0.11.5
+
 # Then we call the fastqc function
 fastqc # here we insert the names of our samples, for example: 
 18134R-91-01_S77_L002_R1_001.fastq.gz 18134R-91-01_S77_L002_R2_001.fastq.gz 18134R-91-02_S78_L002_R1_001.fastq.gz 18134R-91-02_S78_L002_R2_001.fastq.gz 18134R-91-03_S79_L002_R1_001.fastq.gz 18134R-91-03_S79_L002_R2_001.fastq.gz 18134R-91-04_S80_L002_R1_001.fastq.gz 18134R-91-04_S80_L002_R2_001.fastq.gz 18134R-91-05_S81_L002_R1_001.fastq.gz 18134R-91-05_S81_L002_R2_001.fastq.gz 18134R-91-06_S82_L002_R1_001.fastq.gz 18134R-91-06_S82_L002_R2_001.fastq.gz 18134R-91-07_S83_L002_R1_001.fastq.gz 18134R-91-07_S83_L002_R2_001.fastq.gz 18134R-91-08_S84_L002_R1_001.fastq.gz 18134R-91-08_S84_L002_R2_001.fastq.gz 18134R-91-09_S85_L002_R1_001.fastq.gz 18134R-91-09_S85_L002_R2_001.fastq.gz 18134R-91-10_S86_L002_R1_001.fastq.gz 18134R-91-10_S86_L002_R2_001.fastq.gz 18134R-91-11_S0_L001_R1_001.fastq.gz 18134R-91-11_S0_L001_R2_001.fastq.gz 18134R-91-12_S0_L001_R1_001.fastq.gz 18134R-91-12_S0_L001_R2_001.fastq.gz 18134R-91-13_S89_L002_R1_001.fastq.gz 18134R-91-13_S89_L002_R2_001.fastq.gz 18134R-91-14_S0_L001_R1_001.fastq.gz 18134R-91-14_S0_L001_R2_001.fastq.gz 18134R-91-15_S0_L001_R1_001.fastq.gz 18134R-91-15_S0_L001_R2_001.fastq.gz 18134R-91-16_S92_L002_R1_001.fastq.gz 18134R-91-16_S92_L002_R2_001.fastq.gz 18134R-91-17_S0_L001_R1_001.fastq.gz 18134R-91-17_S0_L001_R2_001.fastq.gz 
@@ -59,9 +74,439 @@ Once we have run this script we obtain the results as a html file and zip file p
 https://hbctraining.github.io/Intro-to-rnaseq-hpc-salmon/lessons/qc_fastqc_assessment.html
 https://www.bioinformatics.babraham.ac.uk/projects/fastqc/Help/3%20Analysis%20Modules/
 
+When the quality of the samples has been checked then we can continue to the next step.
+
+## STAR - Sequence Alignment
+
+To determine where on the genome our reads originated from, we will align our reads to the reference genome using STAR (Spliced Transcripts Alignment to a Reference). STAR is an aligner designed to specifically address many of the challenges of RNA-seq data mapping using a strategy to account for spliced alignments. In our case we are working with mouse data so we are aligning our reads to the mouse genome. For more information on STAR and how it works, please refer to the following links:
+
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4631051/
+
+https://hbctraining.github.io/Intro-to-rnaseq-hpc-O2/lessons/03_alignment.html
+
+https://github.com/alexdobin/STAR/blob/master/doc/STARmanual.pdf
+
+First we make a new directory inside the *results* directory for the storage of all the data needed and produced by STAR.
+
+```{r eval=FALSE}
+mkdir staralignment
+```
+
+The use of STAR is divided in to two steps:
+
+First it is necesary to load the STAR module into our environment, for this:
+
+```{r eval=FALSE}
+module load star/2.7.6a
+```
 
 
+### Generating Genome Indexes
 
+For generating genome indexes it's necessary to get the Reference Genome first. To get updated data, the Genome Reference Consortium and ENSEMBL offer clear and updated information. Since we are working with Mouse, here are some links to useful pages which can be use as reference for other species:
 
+http://www.ensembl.org/Mus_musculus/Location/Genome
+https://www.ncbi.nlm.nih.gov/grc
+
+In Ensembl you can find the repositories with all the files regarding the genome. In this case we have used the information for the latest mouse release which can be found in the following link:
+
+http://ftp.ensembl.org/pub/current_fasta/mus_musculus/dna/
+
+We then have to download all the genome data, for this we first create a new directory inside the *staralignment* directory:
+
+```{r eval=FALSE}
+mkdir refgenome
+```
+
+Then we use the **wget** function followed by the link to the file that we want, if no specification is made the download occurs in the current directory, so previously move to the *refgenome* directory just made. For example in this case:
+
+```{r eval=FALSE}
+## This will get us the fasta data for the primary assembly of the most updated
+## release of the mouse genome
+
+cd ./refgenom
+wget http://ftp.ensembl.org/pub/release-104/fasta/mus_musculus/dna/Mus_musculus.GRCm39.dna.primary_assembly.fa.gz 
+```
+
+We also need to get the gtf file with the annotated data for the genome that we're using, this can also be found in the Ensembl repository. 
+
+```{r eval=FALSE}
+wget http://ftp.ensembl.org/pub/current_gtf/mus_musculus/Mus_musculus.GRCm39.104.gtf.gz
+```
+
+Once we have all the files, it is necessary they're not compressed (not with the .gz extension), for decompressing files we can use the following command:
+
+```{r eval=FALSE}
+gunzip Mus_musculus.GRCm39.dna.primary_assembly.fa.gz 
+```
+
+We use the following code for the generation of indexes:
+
+```{r eval=FALSE}
+#!/bin/sh
+#BSUB -q long
+#BSUB -W 07:00 
+#BSUB -n 6
+#BSUB -R span[hosts=1]
+#BSUB -R "rusage[mem=50G]" 
+#BSUB -J STARGenomeIndex
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de 
+
+cd /omics/odcf/analysis/OE0509_projects/hnscc/results/staralignment/genomeindex
+
+module load star/2.7.6a
+
+# number of cores
+STAR --runThreadN 6 
+# command for starting genome generation
+--runMode genomeGenerate 
+# directory in which we want the resulting files to be put in 
+--genomeDir /omics/odcf/analysis/OE0509_projects/hnscc/results/staralignment/genomeindex 
+# fasta files containing the genome of reference (one file with everything)
+--genomeFastaFiles /omics/odcf/analysis/OE0509_projects/hnscc/results/staralignment/refgenom/Mus_musculus.GRCm39.dna.primary_assembly.fa 
+# gtf file for the annotation
+--sjdbGTFfile /omics/odcf/analysis/OE0509_projects/hnscc/results/staralignment/refgenome/Mus_musculus.GRCm39.104.gtf 
+# standard
+--sjdbOverhang 99
+```
+
+### Alignment
+
+Once the genomes are stored we can proceed with the alignment of our samples sequences, for this we also use star. For this we first create a new directory inside the *staralignment* directory:
+
+```{r eval=FALSE}
+mkdir alignment
+```
+
+The files have to be unzipped as they were for the genome index preparation, this can also be done by adding:
+
+- **--readFilesCommand zcat**
+
+To the script for the alignment.
+
+```{r eval=FALSE}
+#!/bin/sh
+#BSUB -q long
+#BSUB -W 07:00 
+#BSUB -n 6
+#BSUB -R span[hosts=1]
+#BSUB -R "rusage[mem=50G]" 
+#BSUB -J STARAlignment
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de 
+
+module load star/2.7.6a
+
+cd /omics/odcf/analysis/OE0509_projects/hnscc/decom_dataset
+
+#Pathway to the genome index
+STAR --genomeDir /omics/odcf/analysis/OE0509_projects/hnscc/results/staralignment/genomeindex 
+
+#number of cores
+--runThreadN 6 
+
+#name of the sample files, if paired end samples then name of the R1 sample then 
+#space, then the R2 sample, repeat for each sample
+--readFilesIn 18134R-91-01_S77_L002_R1_001.fastq 18134R-91-01_S77_L002_R2_001.fastq
+
+#pathway to the directory of alignment results (created before) + prefix for the 
+#files created (if wanted)
+--outFileNamePrefix /omics/odcf/analysis/OE0509_projects/hnscc/results/staralignment/alignment/sample01 
+
+#maximum and minimum intron lenght
+--alignIntronMax 1000000 --alignIntronMin 20 
+#maximum genomic distance between mates
+--alignMatesGapMax 1000000 
+#minimum overhang for unnanotatted and annotated junctions
+--alignSJDBoverhangMin 1 --alignSJoverhangMin 8 
+#maximun number of mismatches per pairs, big number turns off the filter
+--outFilterMismatchNmax 999 --outFilterMismatchNoverLmax 0.1
+
+--alignSoftClipAtReferenceEnds Yes 
+
+#chimeric juntions options
+--chimJunctionOverhangMin 15 --chimMainSegmentMultNmax 1 --chimOutType Junctions SeparateSAMold WithinBAM SoftClip --chimSegmentMin 15 
+
+#shared memory is not used to load the genome of reference
+--genomeLoad NoSharedMemory --limitSjdbInsertNsj 1200000 --outFilterIntronMotifs None --outFilterMatchNminOverLread 0.33  --outFilterMultimapNmax 20 --outFilterScoreMinOverLread 0.33 --outFilterType BySJout 
+
+#SAM attributes
+--outSAMattributes NH HI AS nM NM ch --outSAMstrandField intronMotif 
+#type of SAM file, in this case unsorted
+--outSAMtype BAM Unsorted 
+#Unmapped reads within the SAM file
+--outSAMunmapped Within 
+
+--quantMode TranscriptomeSAM GeneCounts 
+
+#with this two commands we activate the two pass mode
+--twopassMode Basic --twopass1readsN -1 
+```
+
+In the output files we can find:
+
+- Log.progress.out: here we can check minute by minute how the run is going.
+- Log.final.out: here we can check the quality of the run when it's finished.
+- Aligned.out.bam: the file with all the data in BAM format.
+
+## Samtools
+
+### Sort
+
+For HTSeq to work in a more efficient manner the reads have to be ordered (they can be ordered by name or position), for this we are going to use samtools function **order**. For more information on samtools and how to use it please refer to the following links:
+
+http://www.htslib.org/doc/samtools.html
+
+For this we first create a new directory inside the *results* directory:
+
+```{r eval=FALSE}
+mkdir samtools
+```
+
+For this we use the following script:
+
+```{r eval=FALSE}
+#!/bin/sh
+#BSUB -q long
+#BSUB -W 07:00 
+#BSUB -n 6
+#BSUB -R span[hosts=1]
+#BSUB -R "rusage[mem=50G]" 
+#BSUB -J SamtoolsSort
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de 
+
+#we change the working directory into the one we want the output to go 
+cd /omics/odcf/analysis/OE0509_projects/hnscc/results/samtools
+
+#we make sure samtools is installed in the environment
+module load samtools/1.9
+
+#we use the samtools function sort, in this case we indicated the name of the 
+#output file with the command -o
+samtools sort -o sample01_sorted.bam /omics/odcf/analysis/OE0509_projects/hnscc/results/staralignment/alignment/sample01Aligned.out.bam  
+
+```
+
+### Index
+
+For HTSeq to work the BAM files have to be indexed. For this we use **samtools index** which indexes a coordinate-sorted BGZIP-compressed SAM, BAM or CRAM file for fast random access.
+
+```{r eval=FALSE}
+#!/bin/sh
+#BSUB -q long
+#BSUB -W 07:00 
+#BSUB -n 6
+#BSUB -R span[hosts=1]
+#BSUB -R "rusage[mem=50G]" 
+#BSUB -J SamtoolsIndex
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de 
+
+cd /omics/odcf/analysis/OE0509_projects/hnscc/results/samtools
+
+module load samtools/1.9
+
+samtools index sample01_sorted.bam 
+```
+
+Then a file **sample01_sorted.bam.bai** is generated, this contains the index for the sample01_sorted.bam file.
+
+## HTSeq
+
+For counting the sequences that correspond to each gene we are going to use the **HTSeq** package, specifically the **HTSeq count** function. For more information on HTSeq and how to use it please refer to the following links:
+
+https://htseq.readthedocs.io/en/master/index.html
+https://htseq.readthedocs.io/en/release_0.11.1/count.html
+https://bioweb.pasteur.fr/docs/modules/HTSeq/0.5.3p9/count.html
+
+For this we first create a new directory inside the *results* directory:
+
+```{r eval=FALSE}
+mkdir HTSeq
+```
+
+Now we can proceed with the script made for this function:
+
+```{r eval=FALSE}
+#!/bin/sh
+#BSUB -q long
+#BSUB -W 07:00 
+#BSUB -n 6
+#BSUB -R span[hosts=1]
+#BSUB -R "rusage[mem=50G]" 
+#BSUB -J HTSeqCounts
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de 
+
+# We change the directory to the one created for the outputs
+cd /omics/odcf/analysis/OE0509_projects/hnscc/results/HTSeq
+
+# We indicate which programs we want to install in the enviroment previous to the
+# use of the function
+
+# In this case we need the las version of python
+module load python/3.7.0
+
+# And through that, using the pip3 command we can install the HTSeq program
+pip3 install --user HTSeq
+
+# We call the HTSeq.scripts.count function through python3
+python3 -m HTSeq.scripts.count 
+
+# Indicate the format of the file to use, in this case bam
+--format bam 
+
+# Indicate the method of sorting used for the aligned file, in this case we
+# ordered by position
+--order pos
+
+# Indicate if is stranded specific data or not
+--stranded no 
+
+# Mode to handle reads overlapping more than one feature. Possible values for 
+# <mode> are union, intersection-strict and intersection-nonempty
+--mode intersection-nonempty
+
+# Pathway to the aligment file
+/omics/odcf/analysis/OE0509_projects/hnscc/results/samtools/sample01_sorted.bam
+
+# Pathway to the GTF file, we are using the same one used for the creation of the
+# reference genome
+/omics/odcf/analysis/OE0509_projects/hnscc/results/HTSeq/Mus_musculus.GRCm39.104.gtf 
+
+# Indication of the file where to store the output
+> sample01.htseq.counts
+
+```
+
+## RNASeQC
+
+This program gives you some quality control metrics for RNA-Seq data. More on the program on:
+
+https://mybiosoftware.com/rna-seqc-1-1-7-quality-control-metrics-rna-seq-data.html
+
+https://academic.oup.com/bioinformatics/article/28/11/1530/267467
+
+For this function to work we need the reference genome to be indexed in to ways: .fai and .dict. The reference genome and both indexes need to be in the same folder for it to work. To generate this indexes we use samtools and picard:
+
+### Samtools faidx
+
+For more on this function refer to:
+
+http://www.htslib.org/doc/samtools-faidx.html
+
+```{r eval=FALSE}
+#!/bin/sh
+#BSUB -q long
+#BSUB -W 07:00 
+#BSUB -n 6
+#BSUB -R span[hosts=1]
+#BSUB -R "rusage[mem=50G]" 
+#BSUB -J SamtoolsIndexFastaFile 
+
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de 
+
+cd /omics/odcf/analysis/OE0509_projects/hnscc/results/staralignment/refgenom
+
+module load samtools/1.9
+
+## Pathway to the fasta file of the reference genome
+samtools faidx /omics/odcf/analysis/OE0509_projects/hnscc/results/staralignment/refgenom/Mus_musculus.GRCm39.dna.primary_assembly.fa
+```
+
+### Picard CreateSequenceDictionary
+
+For more on this function refer to:
+
+https://gatk.broadinstitute.org/hc/en-us/articles/360037068312-CreateSequenceDictionary-Picard-
+
+```{r eval=FALSE}
+#!/bin/sh
+#BSUB -q long
+#BSUB -W 07:00 
+#BSUB -n 6
+#BSUB -R span[hosts=1]
+#BSUB -R "rusage[mem=50G]" 
+#BSUB -J PicardCreateDictionary
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de 
+
+cd /omics/odcf/analysis/OE0509_projects/hnscc/results/staralignment/refgenom
+
+module load picard/2.25.1
+
+# This program runs in the latest version of Java so to use it we need the 
+# following commands
+java8 -jar /software/picard/2.25.1/bin/picard.jar CreateSequenceDictionary
+
+# Pathway to the fasta file 
+R=/omics/odcf/analysis/OE0509_projects/hnscc/results/staralignment/refgenom/Mus_musculus.GRCm39.dna.primary_assembly.fa
+
+# Name of the output file
+O=Mus_musculus.GRCm39.dna.primary_assembly.fa.dict
+```
+
+The input BAM files need to be sorted and grouped, the sorted step was already done in the previous steps so only grouping is still needed. For this we use picard:
+
+### Picard AddOrReplaceReadGroups
+
+```{r eval=FALSE}
+#!/bin/sh
+#BSUB -q long
+#BSUB -W 07:00 
+#BSUB -n 6
+#BSUB -R span[hosts=1]
+#BSUB -R "rusage[mem=50G]" 
+#BSUB -J BamFilesCreateGroups
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de 
+
+cd /omics/odcf/analysis/OE0509_projects/hnscc/results/samtools
+
+module load picard/2.25.1
+
+# This program runs in the latest version of Java so to use it we need the 
+# following commands
+java8 -jar /software/picard/2.25.1/bin/picard.jar AddOrReplaceReadGroups
+
+# Pathway to the sorted BAM file
+I=/omics/odcf/analysis/OE0509_projects/hnscc/results/samtools/sample01_sorted.bam 
+
+# Output file that is going to be created 
+O=sample01_sorted_grouped.bam RGLB=lib1 RGPL=illumina RGPU=unit1 RGSM=sample01
+```
+
+Underneath you can find a table on the mandatory inputs of the fuction:
+
+![](picardgroups.png)
+
+Once this is all completed we can run the code for the RNASeQC function, we always have to use the reference genome and annotations that have been used for the alignment:
+
+```{r eval=FALSE}
+#!/bin/sh
+#BSUB -q verylong
+#BSUB -n 6
+#BSUB -R span[hosts=1]
+#BSUB -R "rusage[mem=50G]" 
+#BSUB -J RNASeQC
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de 
+
+cd /omics/odcf/analysis/OE0509_projects/hnscc/results/rnaseqc
+
+module load java/1.8.0_131
+
+module load rnaseqc/1.1.8
+
+rnaseqc 
+
+# Pathway to the output folder
+-o /omics/odcf/analysis/OE0509_projects/hnscc/results/rnaseqc/Sample01
+
+# Pathway to the reference genome fasta file (.fai and .dict in same directory)
+-r /omics/odcf/analysis/OE0509_projects/hnscc/results/staralignment/refgenom/Mus_musculus.GRCm39.dna.primary_assembly.fa 
+
+# Name and pathway to the bam file
+-s "Sample01|/omics/odcf/analysis/OE0509_projects/hnscc/results/samtools/sample01_sorted_grouped.bam|Sample01Desc" 
+
+# Pathway to the annotation file
+-t /omics/odcf/analysis/OE0509_projects/hnscc/results/staralignment/refgenome/Mus_musculus.GRCm39.gtf 
+```
+
+The ouput is contained in the Sample01 directory.
 
 
