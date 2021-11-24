@@ -22,6 +22,8 @@ Other commands used quite frequently:
 - **which** followed by the name of a program.
   - Version of the program installed in the environment.
   - Source of the program so it's easier to find.
+- **wget**: downloads data from a link provided into the working directory.
+- **gzip** -d/**gunzip**: decompress gz files.
 - **vim** followed by a filename: lets you open files on the terminal. Once the file is open:
   - Press -i (for insert) and modify the document.
   - To quit press esc, then shift and :, if you have written on the document then write w followed by q. Example:
