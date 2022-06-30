@@ -1,0 +1,898 @@
+---
+title: "Single Cell Analysis"
+subtitle: "Using Seurat Package"
+author: "Cristina Conde Lopez"
+date: "3/30/2022"
+output: html_document
+---
+
+It is necesary to have an installation of Miniconda to be able to use this packkages and an installation of pandas in the conda re-reticulate:
+
+conda_install('re-reticulate', packages = 'pandas')
+
+# Loading Single Cell Data into R
+
+Start by loading the necessary packages:
+
+```{r}
+library(Seurat)
+library(SeuratDisk)
+library(tidyverse)
+library(ggplot2)
+library(gridExtra)
+```
+
+## .rds format
+
+Loading .RDS format, this is usually already a Seurat object:
+
+```{r}
+rds_obj <- readRDS("ependymal_cells.rds")
+```
+
+## .h5 format
+
+10X CellRanger outputs de data as .HDF5 format, loading this data:
+
+```{r}
+hdf5_obj <- Read10X_h5("20k_PBMC_3p_HT_nextgem_Chromium_X_filtered_feature_bc_matrix.h5", use.names = T, unique.features = T)
+```
+
+We can take a look at the object, in which can see that the rows are features (genes) and the columns are barcodes:
+
+```{r}
+hdf5_obj[1:10, 1:10]
+```
+
+To convert this into a Seurat object:
+
+```{r}
+seurat_hdf5 <- CreateSeuratObject(counts = hdf5_obj)
+```
+
+## .mtx format
+
+Loading the .mtx file, output of CellRanger, with the barcode and feature files, with all of this information we can construct the Seurat object:
+
+```{r}
+matrix_obj <- ReadMtx(
+  #matrix of counts
+  mtx = "raw_feature_bc_matrix/matrix.mtx.gz",
+  #features (gene) information
+  features = "raw_feature_bc_matrix/features.tsv.gz",
+  #barcodes (cells) information
+  cells = "raw_feature_bc_matrix/barcodes.tsv.gz"
+)
+```
+
+We can take a look at the object, in which can see that the rows are features (genes) and the columns are barcodes:
+
+```{r}
+matrix_obj[1:10, 1:10]
+```
+To convert this into a Seurat object:
+
+```{r}
+seurat_mtx <- CreateSeuratObject(counts = matrix_obj)
+```
+
+## .loom format
+
+Loading .loom files:
+
+```{r, eval=FALSE}
+loom_obj <- Connect(filename = "name of the loom file", mode = 'r')
+```
+
+Save in a Seurat object:
+
+```{r, eval=FALSE}
+seurat_loom <- as.Seurat(loom_obj)
+```
+
+## .h5ad (AnnData) format
+
+Loading .h5ad format, this format is used to store data in Scanpy (Python):
+
+1. Covert AnnData object to an h5Seurat file:
+
+```{r}
+Convert("adata_SS2_for_download.h5ad", dest = "h5seurat", overwrite = T)
+```
+
+2. Load h5Seurat file into Seurat object:
+
+```{r}
+seurat_anndata <- LoadH5Seurat("adata_SS2_for_download.h5seurat")
+```
+
+# Analizing Single-Cell Data in R
+
+Data extracted from the 10xgenomics webpage following this link:
+
+https://www.10xgenomics.com/resources/datasets/20-k-mixture-of-nsclc-dt-cs-from-7-donors-3-v-3-1-3-1-standard-6-1-0
+
+It consist on data from non-small cell lung cancer (NSCLC) dissociated tumor cells from 7 donors. We only download the cell matrix HDF5 (raw)
+
+## Uploading the Data
+
+We upload the data:
+
+```{r}
+nsclc.sparse.m <- Read10X_h5("20k_NSCLC_DTC_3p_nextgem_Multiplex_count_raw_feature_bc_matrix.h5")
+```
+
+We can see that the object has multiple modalities as the warning shows, we can take a look at them:
+
+```{r}
+names(nsclc.sparse.m)
+```
+
+Since the one we're going to work is "Gene Expression" we take it out into a new object.
+
+```{r}
+cts <- nsclc.sparse.m$`Gene Expression`
+cts[1:10,1:10]
+```
+
+We read this counts into a Seurat object:
+
+```{r}
+nsclc.seurat.obj <- CreateSeuratObject(counts = cts, project = "NSCLC",
+                   #establishing a threshold of cells:
+                   min.cells = 3,
+                   #establishing a threshold of features (genes):
+                   min.features = 200)
+```
+
+## Quality Control of the Data
+
+We take a look into different parameters:
+
+-nFeature_RNA: Number of features in the cell.
+-nCount_RNA: Number of molecules in the cell.
+-percent.mt: Percentage of mitochondrial genes.
+
+This let's us distinguish the low quality cells, since these cells have a low number of genes (or low number of molecules detected) or a number which is too high, that could be a sign for doublets or multiple cells in the droplet. We need to take them out from our data set to achieve good quality results. We also look at the percentage of mitochondrial genes, this is due to a higher mitochondrial contamination in dying or poor quality cells.
+
+1. We calculate the percentage of mitochondrial genes (this are the ones starting with MT) and save it in a new variable in the Seurat object:
+
+```{r}
+nsclc.seurat.obj[["percent.mt"]] <- PercentageFeatureSet(nsclc.seurat.obj, pattern = '^MT-')
+colnames(nsclc.seurat.obj@meta.data)
+```
+
+2. We can visualize this features as a Violin Plot:
+
+```{r}
+VlnPlot(nsclc.seurat.obj, features = c("nFeature_RNA","nCount_RNA", "percent.mt"))
+```
+
+We can look at this features together in the different axis:
+
+```{r}
+FeatureScatter(nsclc.seurat.obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") +
+  geom_smooth(method = "lm")
+```
+
+X axes: number of molecules, Y axes: number of genes. A good quality dataset should follow the straight line. In this case the majority of cells follow the line.
+In the case that we find many dots in the right bottom corner of the graph we can infer that only a few genes have been sequenced over and over that's why we see few genes but many transcripts, we shouldn't see this.
+In the case that we find many dots in the top left corner we can infer that a lot of genes have been sequenced but the depht is not enough, which we can see in the low level of transcripts. 
+
+3. Now we can proceed with the filtering:
+
+There are other features that can be used for the filtering, like percentage of ribosomal genes (this metric can be calculated same as the percentage of mitochondrial genes). There is also a package called *Doublets finder* which filters out the doublets.
+
+```{r}
+nsclc.seurat.obj <- subset(nsclc.seurat.obj, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+```
+
+4. Normalize the data in order to be able to compare one cell with others (this consist in dividing the gene expression in each cell by the total expression and multiplying by an scaling factor and log transform it).
+
+```{r}
+nsclc.seurat.obj <- NormalizeData(nsclc.seurat.obj
+                                  # prestablished parameters
+                                  # normalization.method = "logNormalize",
+                                  # scale.factor = 10000
+                                  )
+```
+
+You can see the commands used in the Seurat object inside it section @commands, in this case we can se the Normalization step:
+
+```{r}
+nsclc.seurat.obj@commands
+```
+
+5. We can now identify high variable features (this means genes that vary more between cells, using these genes will highlight the biological relevance of the analysis):
+
+```{r}
+nsclc.seurat.obj <- FindVariableFeatures(nsclc.seurat.obj, selection.method = "vst", nfeatures = 2000)
+```
+
+We can now take a look a the top 10 most variable features in our dataset:
+
+```{r}
+top10 <- head(VariableFeatures(nsclc.seurat.obj), 10)
+top10
+```
+
+This features can be plotted, with and without labels.
+
+```{r}
+plot1 <- VariableFeaturePlot(nsclc.seurat.obj)
+LabelPoints(plot = plot1, points = top10, repel = T)
+```
+
+6. Now we can scale the data (in the dataset there are a lot of unwanted sources of variation, this can be due to technical reasons or biological reasons, we want to account for these sources of variation so we don't find wrong clustering in later steps):
+
+```{r}
+all.genes <- rownames(nsclc.seurat.obj)
+nsclc.seurat.obj <- ScaleData(nsclc.seurat.obj, features = all.genes)
+```
+
+If we check the Seurat object under assays we can find:
+
+- Counts: raw
+- Data: normalized
+- Scale.data: with scaling
+
+7. Perform linear dimensionality reduction, for this we use PCA, to identify the sources of heterogeneity in our analysis.
+
+```{r}
+nsclc.seurat.obj <- RunPCA(nsclc.seurat.obj, features = VariableFeatures(nsclc.seurat.obj))
+```
+We see the principal components with the genes that have a positive or negative influence over the component.
+
+We can visualize the result of the PCA:
+
+```{r}
+print(nsclc.seurat.obj[["pca"]], dims = 1:5, nfeatures = 5)
+```
+We can plot a Heatmap to see which genes are more heterogenous:
+
+```{r}
+DimHeatmap(nsclc.seurat.obj, dims = 1, cells = 500, balanced = T)
+```
+
+We can determine the dimensionality of the data, choosing statistically significant components that capture the majority of variability of the data:
+
+```{r}
+ElbowPlot(nsclc.seurat.obj)
+```
+
+In this case it looks that somewhere around 15.
+
+8. Clustering our cells together, we want to find cells that have similar expression patterns and cluster them together.
+
+```{r}
+nsclc.seurat.obj <- FindNeighbors(nsclc.seurat.obj, dims = 1:15)
+```
+
+Once we have use the Find Neighbors function we can make the cluster, the resolution parameter determines in how many clusters we're dividing our data. The lower the resolution, the fewer amount of clusters and the opposite.
+
+```{r}
+nsclc.seurat.obj <- FindClusters(nsclc.seurat.obj, resolution = c(0.1,0.3,0.5,0.7,1))
+View(nsclc.seurat.obj@meta.data)
+```
+
+```{r}
+DimPlot(nsclc.seurat.obj, group.by = "RNA_snn_res.0.1", label = T)
+DimPlot(nsclc.seurat.obj, group.by = "RNA_snn_res.0.3", label = T)
+DimPlot(nsclc.seurat.obj, group.by = "RNA_snn_res.0.5", label = T)
+DimPlot(nsclc.seurat.obj, group.by = "RNA_snn_res.0.7", label = T)
+DimPlot(nsclc.seurat.obj, group.by = "RNA_snn_res.1", label = T)
+```
+
+In this case we see that a lower resolution may give a better clustering, since higher resolutions make overlapping of clusters and divide the cells in clusters that we don't really need. Of course this is a linear representation of only the two principal components so is not all the information.
+
+We can set the identity of the cells in the clusters. For this we take a look first at the present identity of the clusters with the function Idents()
+
+
+
+In this case the identity is 19 so it means that it choose already one of the clusters, we can change this by:
+
+```{r}
+Idents(nsclc.seurat.obj) <- "RNA_snn_res.0.1"
+```
+
+We can also do a non-linear reduction of the dimensionality of the data, this let's us also cluster our cells depending on similarities in the low dimension space so we can further explore this data.
+
+```{r}
+nsclc.seurat.obj <- RunUMAP(nsclc.seurat.obj, dims = 1:15)
+```
+
+```{r}
+DimPlot(nsclc.seurat.obj, reduction = "umap")
+```
+
+# Intregate single-cell RNA-Seq dataset in R using Seurat
+
+## When to use integration?
+
+- Integration of multiple scRNA-Seq datasets from different conditions, treatments, patients... 
+- For cell label transfer, from a well annotated dataset (reference dataset), to a query dataset.
+- Integration of multimodal single cell data, in which we can find different types of data for the same samples (scRNA-Seq and scATAC-Seq), then we can integrate it into a single-cell multi-omics data set, where the signals where collected from separate assays.
+- Integration of scRNA-Seq and spatial expression data, integrates topological arrangement of cells in tissues with gene expression data.
+
+## Types of integration
+
+- Horizontal Integration:
+  - Same modality of data being measure from independent group of cells.
+  - Ex: scRNA-seq from same tissue from different patients/donors/sequencing technology.
+  - Assays are anchored by common gene set.
+- Vertical Integration:
+  - Multiple modalities performed at the same time on same cells.
+  - Ex: scRNA-seq and scATAC-seq from same cells.
+  - Assays are anchored by cells.
+- Diagonal Integration:
+  - Different modalities from different groups of cells.
+  - Ex: scRNA-seq and scATAC-seq performed on different cells.
+  
+## Batch Correction Methods:
+
+- MNN
+- Seurat v3
+- LIGER
+- Harmony
+- BBKNN
+- scVI
+- Conos
+- Scmap
+- Scanorama
+- sc Align
+
+## Data Integration and Batch Correction Pipeline:
+
+The data was downloaded from the GEO Platform with Accession ID GSE180665 on the 4th of April. The data is stored in our working directory (Single_Cell_Analysis) in a folder named GSE180665_RAW. Each dataset for each patient and type of sample in stored in different folders.
+
+We can first get the names of the directories that contain our files:
+
+```{r}
+dirs <- list.dirs(path = '~/Single_Cell_Analysis/GSE180665_RAW', recursive = F, full.names = F)
+```
+
+```{r}
+dirs
+```
+To upload the data for each patient and type of sample as a Seurat object we create a loop in which we first create a Mtx object with the matrix, feature and cell files and from this we create a Seurat object for each.
+
+```{r}
+for (dir in dirs){
+  name <- gsub('_filtered_feature_bc_matrix', '', dir)
+  cts <- ReadMtx( mtx =
+                paste0('GSE180665_RAW/', dir, 
+                       '/matrix.mtx.gz'), features = 
+                paste0('GSE180665_RAW/', dir, 
+                       '/features.tsv.gz'), cells = 
+                paste0('GSE180665_RAW/', dir, 
+                       '/barcodes.tsv.gz'))
+  assign(name, CreateSeuratObject(counts = cts))
+}
+```
+
+## Quality Control of the Data
+
+This could be done for each of the 7 objects individually, but this process will be more time consuming and error prone since we will have to do it manually. Then we can merge all the datasets into one, this way all will be processed at the same time in the same way.
+
+```{r}
+merged_seurat <- merge(HB17_background, y = c(HB17_PDX,HB17_tumor,HB30_PDX,HB30_tumor,HB53_background,HB53_tumor), add.cell.ids = ls()[1:7], project = "HB")
+```
+
+```{r}
+merged_seurat
+```
+
+### QC and filtering
+
+```{r}
+rownames(merged_seurat@meta.data)[1:10]
+```
+
+We see that each sample has a prefix which indicates the patient and tissue where it's coming from, so we can start by creating a column in the metadata dataset that has this information
+
+```{r}
+merged_seurat$sample <- rownames(merged_seurat@meta.data)
+merged_seurat@meta.data <- separate(merged_seurat@meta.data, col = "sample", into = c("Patient", "Type", "Barcode"), sep = '_')
+```
+
+We check that the information has splitted properly:
+
+```{r}
+colnames(merged_seurat@meta.data)
+```
+
+And that we have all the patients and sample types that we expected:
+
+```{r}
+unique(merged_seurat@meta.data$Patient)
+unique(merged_seurat@meta.data$Type)
+```
+
+#### Percentage of mitochondrial genes:
+
+```{r}
+merged_seurat$mitoPercent <- PercentageFeatureSet(merged_seurat, pattern = '^MT-')
+```
+
+We can also look at numbers of transcripts and genes for this we can check in the part dedicated for this above.
+
+```{r}
+merged_seurat_filtered <- subset(merged_seurat, subset = nCount_RNA > 800 & nFeature_RNA > 500 & mitoPercent < 10)
+```
+
+```{r}
+merged_seurat_filtered
+```
+
+#### Batch effect
+
+Since we have samples from different sources is important to check if we see any batch effects:
+
+1. Normalize data:
+
+```{r}
+merged_seurat_filtered <- NormalizeData(object = merged_seurat_filtered)
+```
+
+2. Find variable features:
+
+```{r}
+merged_seurat_filtered <-  FindVariableFeatures(object = merged_seurat_filtered)
+```
+
+3. Scale Data:
+
+```{r}
+merged_seurat_filtered <-  ScaleData(object = merged_seurat_filtered)
+```
+
+4. Run PCA Analysis
+
+```{r}
+merged_seurat_filtered <- RunPCA(object = merged_seurat_filtered)
+```
+
+5. Find the Dimensions of the Dataset:
+
+```{r}
+ElbowPlot(merged_seurat_filtered)
+```
+
+We can see that the variation seems to be captured in the first 15 components. We are going to use all the 20 components for the next steps:
+
+```{r}
+merged_seurat_filtered <- FindNeighbors(object = merged_seurat_filtered, dims = 1:20)
+```
+
+We clusterize the data:
+
+```{r}
+merged_seurat_filtered <- FindClusters(object = merged_seurat_filtered)
+```
+
+And now non-linear dimensionality reduction:
+
+```{r}
+merged_seurat_filtered <- RunUMAP(object = merged_seurat_filtered, dims = 1:20)
+```
+
+Now we're going to plot the data. We want to know which cells came from each patient so we color them together, also by tissue type.
+
+```{r}
+p1 <- DimPlot(merged_seurat_filtered, reduction = "umap", group.by = "Patient")
+```
+
+```{r}
+p2 <- DimPlot(merged_seurat_filtered, reduction = "umap", group.by = "Type", cols = c("red", "green", "blue"))
+```
+
+```{r}
+grid.arrange(p1,p2, ncol =2, nrow = 2)
+```
+We can see that cells, from the left graph, are clustering differently for each patient and not by cell type. This means that there's some batch effect which doesn't let us see the biological variation clearly, we have to correct the data to be able to see the biological variation.
+
+##### Perform integration to correct for batch effects
+
+```{r}
+obj.list <- SplitObject(merged_seurat_filtered, split.by = "Patient")
+```
+
+```{r}
+for (i in 1:length(obj.list)){
+  obj.list[[i]] <- NormalizeData(object = obj.list[[i]])
+  obj.list[[i]] <- FindVariableFeatures(object = obj.list[[i]])
+}
+```
+
+We now select integration features:
+
+```{r}
+features <- SelectIntegrationFeatures(object.list = obj.list )
+```
+
+When we have selected the integration features we have to find the integration anchors (CCA), to integrate the data across different patients. In order to do that we are going to utilize a method called Canonical Correlation Analysis:
+
+```{r}
+anchors <- FindIntegrationAnchors(object.list = obj.list, anchor.features = features)
+```
+
+And with this we can now integrate the data:
+
+```{r}
+seurat.integrated <- IntegrateData(anchorset = anchors)
+```
+Scale data
+
+```{r}
+seurat.integrated <- ScaleData(seurat.integrated)
+```
+
+```{r}
+seurat.integrated <- RunPCA(seurat.integrated)
+```
+
+```{r}
+seurat.integrated <- RunUMAP(seurat.integrated, dims = 1:50)
+```
+
+
+```{r}
+p3 <- DimPlot(seurat.integrated, reduction = "umap", group.by = "Patient")
+p4 <- DimPlot(seurat.integrated, reduction = "umap", group.by = "Type")
+```
+
+```{r}
+grid.arrange(p3, p4, ncol = 2)
+```
+
+# Find markers and cluster identification in single-cell RNA-Seq using Seurat
+
+## Loading the data
+
+```{r}
+ifnb_harmony <- readRDS('ifnb_harmony.rds')
+str(ifnb_harmony)
+View(ifnb_harmony@meta.data)
+```
+
+## Visualizing the data
+
+```{r}
+clusters <- DimPlot(ifnb_harmony, reduction = 'umap', group.by = 'seurat_clusters', label = TRUE)
+condition <- DimPlot(ifnb_harmony, reduction = 'umap', group.by = 'stim')
+```
+
+```{r}
+condition|clusters
+```
+
+Now we want to annotate and identify cell types that form each cluster. We can see that every cluster contains cells from the two different conditions.
+
+## findAll markers 
+
+This function is useful when we want to compare a cluster with all the others clusters, for example, when we want to find the identity (the concrete cell type) of a cluster. This function is more appropiate for datasets that only have one condition.
+
+```{r}
+FindAllMarkers(ifnb_harmony,
+               # Minimal logfc of the gene in the cluster we want to find vs. in others.
+               logfc.threshold = 0.25,
+               # minumun frequency in which genes are detected in the populations
+               min.pct = 0.1,
+               # Only markers that are upregulated
+               only.pos = TRUE,
+               # type of DEanalysis we're using
+               test.use = 'DESeq2',
+               # Select the slot which we want to use, counts because of DESeq2
+               slot = 'counts')
+# Not necessary to select a cluster because it iteratively compares one cluster to all the other clusters.
+```
+
+## findConserved markers -------------
+
+This function is useful when we have several conditions and several cell types, we can compare same cell type in different conditions or same conditions different cell type. In this case we first want to look for the identity of cluster 3, so we want to compere cluster 3 with all the others clusters.
+
+**Notes:** slot depends on the type of the test used, default is data slot that stores normalized data
+ 
+```{r}
+DefaultAssay(ifnb_harmony) <- 'RNA'
+```
+
+```{r}
+markers_cluster3 <- FindConservedMarkers(ifnb_harmony,
+                     ident.1 = 3,
+                     #if instead of comparing with all the clusters we want to compare 
+                     #with only 1 we can select it in ident.2
+                     grouping.var = 'stim')
+
+head(markers_cluster3)
+```
+
+In the results we can see that cluster 3 was compared for each of the conditions to the rest of the clusters.
+
+- p-val: statistical significance.
+- avg_Log2FC: in the selected cluster compared with all the other clusters.
+- pct.1: percentage of cells in which the gene was detected for cluster 3
+- pct.2: percentage of cells in which the gene was detected for the rest of clusters.
+
+Let's visualize top features:
+
+```{r}
+FeaturePlot(ifnb_harmony, features = c('FCGR3A'), min.cutoff = 'q10' #this is the 10th quantile
+            )
+```
+
+
+Min-cut off paratemer explanation:
+
+This is the gene expression cutoff, it indicates that the cells that have a lower expression value than the selected value will be painted in grey and higher the selected value will be colored. Example of how quantiles work:
+
+```{r}
+seq(1,5)
+SetQuantile('q50', seq(1,5))
+SetQuantile('q10', seq(1,5))
+```
+
+Rename cluster 3 identity with the information we got from the DEG, FCGR3A is a marker for CD16 Monocytes so that is how we're going to rename our cluster.
+
+```{r}
+Idents(ifnb_harmony)
+ifnb_harmony <- RenameIdents(ifnb_harmony, `3` = 'CD16 Mono')
+```
+
+We can visualize the name change of the cluster:
+
+```{r}
+DimPlot(ifnb_harmony, reduction = 'umap', label = T)
+```
+
+Cells already have annotations provided in the metadata for training porpuses but this is not the case in real live scenario:
+```{r}
+View(ifnb_harmony@meta.data)
+```
+
+Settings cluster identities is an iterative step multiple approaches could be taken - automatic/manual anotations (sometimes both) need to make sure each cell type forms a separate cluster
+
+Setting Idents as Seurat annotations provided (also a sanity check!)
+```{r}
+Idents(ifnb_harmony) <- ifnb_harmony@meta.data$seurat_annotations
+Idents(ifnb_harmony)
+```
+
+```{r}
+DimPlot(ifnb_harmony, reduction = 'umap', label = TRUE)
+```
+
+Now that the different groups are established we can use findMarkers function to find differences between conditions ---------------------
+```{r}
+# create a new column in our data that has the celltype and condition together
+ifnb_harmony$celltype.cnd <- paste0(ifnb_harmony$seurat_annotations,'_', ifnb_harmony$stim)
+View(ifnb_harmony@meta.data)
+# We define this new variable as the identity of our cell groups
+Idents(ifnb_harmony) <- ifnb_harmony$celltype.cnd
+```
+
+```{r}
+DimPlot(ifnb_harmony, reduction = 'umap', label = TRUE)
+```
+
+With this new identities we can find markers between same cell type but different conditions:
+
+```{r}
+b.interferon.response <- FindMarkers(ifnb_harmony, ident.1 = 'CD16 Mono_STIM', ident.2 = 'CD16 Mono_CTRL')
+```
+
+```{r}
+head(b.interferon.response)
+```
+
+Now we can plot conserved features and DE features between conditions:
+
+```{r}
+head(markers_cluster3)
+```
+
+```{r}
+FeaturePlot(ifnb_harmony, features = c('FCGR3A', 'AIF1', 'IFIT1'), split.by = 'stim', min.cutoff = 'q10')
+```
+
+# Pseudo-bulk analysis for single-cell RNA-Seq data
+
+This is done to convert the single cell data into a type of data more similar to bulk RNAseq, with this the gene expression of cells across a sample a aggregated in a way that only one value of gene expression is left per sample. 
+
+```{r}
+library(ExperimentHub)
+library(Seurat)
+library(DESeq2)
+library(tidyverse)
+```
+
+
+
+We get the data using the ExperimentHub package:
+
+```{r}
+eh <- ExperimentHub()
+query(eh, "Kang")
+
+sce <- eh[["EH2259"]]
+seu.obj <- as.Seurat(sce, data = NULL)
+View(seu.obj@meta.data)
+```
+
+## QC and filtering
+
+1. Get mitochondrial DNA percent
+
+```{r}
+seu.obj$mitoPercent <- PercentageFeatureSet(seu.obj, pattern = '^MT-')
+View(seu.obj@meta.data)
+```
+
+2. Filter the low quality cells:
+
+```{r}
+seu.filtered <- subset(seu.obj, subset = nFeature_originalexp > 200 & nFeature_originalexp < 2500 &
+         nCount_originalexp > 800 & 
+         mitoPercent < 5 &
+         multiplets == 'singlet')
+
+seu.obj
+seu.filtered
+```
+
+
+We now run Seurat's standard workflow steps:
+
+```{r}
+seu.filtered <- NormalizeData(seu.filtered)
+seu.filtered <- FindVariableFeatures(seu.filtered)
+seu.filtered <- ScaleData(seu.filtered)
+seu.filtered <- RunPCA(seu.filtered)
+ElbowPlot(seu.filtered)
+seu.filtered <- RunUMAP(seu.filtered, dims = 1:20)
+```
+
+
+Now we can visualize this data:
+
+```{r}
+cell_plot <- DimPlot(seu.filtered, reduction = 'umap', group.by = 'cell', label = TRUE)
+cond_plot <- DimPlot(seu.filtered, reduction = 'umap', group.by = 'stim')
+
+cell_plot|cond_plot
+```
+
+In this case we can see that the data is not integrated well between conditions (in the condition plot) but in this case it doesn't matter because for the pseudo-bulk workflow uses the raw cound data and the integration workflow uses the already normalized data.
+
+In this case we want to do a differential expression analysis in between the Bcells for both conditions, so we have to aggregate the gene expression for B cells at sample level (so different samples together)
+
+## Pseudo-bulk workflow 
+
+Acquiring necessary metrics for aggregation across cells in a sample
+
+# 1. counts matrix - sample level
+# counts aggregate to sample level
+
+```{r}
+# We select the column with the samples id and the condition to create a code for samples.
+View(seu.filtered@meta.data)
+seu.filtered$samples <- paste0(seu.filtered$stim, seu.filtered$ind)
+```
+
+```{r}
+DefaultAssay(seu.filtered)
+```
+
+
+```{r}
+cts <- AggregateExpression(seu.filtered, 
+                    group.by = c("cell", "samples"),
+                    assays = 'originalexp',
+                    slot = "counts",
+                    return.seurat = FALSE)
+
+```
+
+Since we get a list with a matrix inside we want to extract the matrix:
+
+```{r}
+cts <- cts$originalexp
+```
+
+Now we proceed to separate the large matrix by cell type:
+
+1. Tansposing the matrix so we can work with split rows.
+```{r}
+cts.t <- t(cts)
+```
+
+2. Convert to data.frame
+```{r}
+cts.t <- as.data.frame(cts.t)
+```
+
+3. Get values where to split
+```{r}
+splitRows <- gsub('_.*', '', rownames(cts.t))
+```
+
+4. Split data.frame
+```{r}
+cts.split <- split.data.frame(cts.t,
+                 f = factor(splitRows))
+```
+
+
+5. Fix colnames and transpose
+
+```{r}
+cts.split.modified <- lapply(cts.split, function(x){
+  # by using gsub we want to retain everything that is after the underscore 
+  # (Bcell_str105) so .*_.* with this we select everything before and after the
+  # underscore but since we only want to select the after we put () for it
+  # so .*_(.*) and then we replace by only this group selected '\\1' with this. 
+  rownames(x) <- gsub('.*_(.*)', '\\1', rownames(x))
+  t(x)
+  
+})
+```
+
+
+```{r}
+#Example
+gsub('.*_(.*)', '\\1', 'B cells_ctrl101')
+```
+
+
+## Let's run DE analysis with B cells
+
+1. Get counts matrix
+```{r}
+counts_bcell <- cts.split.modified$`B cells`
+```
+
+2. Generate sample level metadata
+```{r}
+colData <- data.frame(samples = colnames(counts_bcell))
+
+colData <- colData %>%
+  # with grepl we see if stim is in the value, if yes the column has stimulated value
+  # if no control 
+  mutate(condition = ifelse(grepl('stim', samples), 'Stimulated', 'Control')) %>%
+  column_to_rownames(var = 'samples')
+```
+
+
+## Perform DESeq2 
+
+Create DESeq2 object:
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = counts_bcell,
+                       colData = colData,
+                       design = ~ condition)
+
+```
+
+We filter it 
+```{r}
+keep <- rowSums(counts(dds)) >=10
+dds <- dds[keep,]
+```
+
+We run DESeq2:
+```{r}
+dds <- DESeq(dds)
+```
+
+Check the coefficients for the comparison:
+```{r}
+resultsNames(dds)
+```
+
+Generate results object:
+```{r}
+res <- results(dds, name = "condition_Stimulated_vs_Control")
+res
+```
+
+
