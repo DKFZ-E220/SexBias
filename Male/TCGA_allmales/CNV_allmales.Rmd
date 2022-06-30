@@ -1,0 +1,784 @@
+---
+title: "CNV Analysis TCGA Multiple Projects (Male > 50)"
+subtitle: "Obtatining Copy Number Index"
+author: "Cristina Conde López"
+date: "`r Sys.Date()`"
+output: 
+ prettydoc::html_pretty:
+    toc: true
+    theme: hpstr
+    highlight: github
+    number_sections: true
+ pdf_document:
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+bibliography: citations.bibtex
+nocite: '@*'
+---
+
+```{r, message=FALSE, eval=FALSE}
+library(rlist)
+```
+This in case there is tumor nuclei percent information:
+
+```{r, eval=FALSE}
+require(data.table)
+biospecimen <-as.data.frame(fread('slide.tsv'))
+df <- lapply(biospecimen, function(x) as.data.frame(gsub("'--", NA, x)))
+data_frame <- data.frame(df$case_submitter_id, df$percent_tumor_nuclei)
+```
+
+
+# Obtaining CNI
+
+Upload 'TCGA_onlymalemore50_segmented_data.rdata', which contains the Segmented Data for the males only into h variable:
+
+```{r, eval=FALSE}
+h <- x
+```
+
+The Segmented Data is introduced in a loop prepared for the calculation of the Copy Number Index:
+
+```{r, eval=FALSE}
+f <- list()
+for (proj in name_proj) {
+  # Extracting the dataset with Segmented Data for the specific project:
+  TCGA_BLCA <- do.call(rbind.data.frame, h[proj])
+  # Calculating all the variables necessary for CNI:
+  TCGA_BLCA$Size <- TCGA_BLCA$End - TCGA_BLCA$Start
+  TCGA_BLCA$Unlog_Segment <- 2^(1+TCGA_BLCA$Segment_Mean)
+  TCGA_BLCA$Weighted_value <- TCGA_BLCA$Unlog_Segment*TCGA_BLCA$Size
+  patients_male <- split(TCGA_BLCA, f = TCGA_BLCA$Sample)
+  ID <- names(patients_male)
+  a <- c(1:22, "X", "Y")
+  # Loop for calculating the CNI:
+  x <- list()
+    for (v in (1:length(patients_male))) {
+      vec <- c()
+      for (i in a) {
+        mean <- sum(patients_male[[v]]$Weighted_value[patients_male[[v]]$Chromosome %in% i])/sum(patients_male[[v]]$Size[patients_male[[v]]$Chromosome %in% i])
+        vec <- c(vec,mean)
+      }
+    names(vec) <- c(1:22, "X", "Y")
+    x[[paste0(ID[v])]] <- vec
+    }
+  # Unfolding the list with the results in a dataframe, and naming of the colums and rows:
+  chrom_male <- do.call(rbind.data.frame, x)
+  colnames(chrom_male) <- a
+  rownames(chrom_male) <- ID
+  # Adding each new dataframe to a list, each object each project:
+  f[[paste0(proj)]] <- chrom_male
+}
+```
+
+A list of datasets with CNI Data for each project is generated and stored as a rdata object:
+
+```{r, eval=FALSE}
+list.save(f, 'TCGA_male_chrom_index.rdata')
+```
+
+# Plotting the Chromosome Index for the Y and X chromosomes in Male patients
+
+The CNI Data is introduced in a loop prepared to plot the density of CNI of the Y chromosome and save the plots in the directory of this file:
+
+```{r, eval=FALSE}
+for (proj in name_proj) {
+  TCGA_BLCA <- do.call(rbind.data.frame, f[proj])
+  den <- density(TCGA_BLCA$Y)
+  file <- paste0("plotY_", proj, ".png")
+  png(file= file, width=600, height=350)
+  title <- paste0("Chrom Y in Males ", proj)
+  plot(den, xlim = c(0,2), main = title) 
+  dev.off()
+}
+```
+
+The CNI Data is introduced in a loop prepared to plot the density of CNI of the X chromosome and save the plots in the directory of this file:
+
+```{r, eval=FALSE}
+for (proj in name_proj) {
+  TCGA_BLCA <- do.call(rbind.data.frame, x[proj])
+  den <- density(TCGA_BLCA$X)
+  file <- paste0("plotX_", proj, ".png")
+  png(file= file, width=600, height=350)
+  title <- paste0("Chrom X in Males ", proj)
+  plot(den, xlim = c(0,4), main = title) 
+  dev.off()
+}
+```
+
+The CNI for the TCGA-PCPG cohort is not inside the parameters that all the others are (main peak around 4), we decide to take out this project:
+
+```{r, eval=FALSE}
+ TCGA_BLCA <- do.call(rbind.data.frame, x["TCGA-PCPG"])
+  den <- density(TCGA_BLCA$Y)
+  title <- paste0("Chrom Y in Males ","TCGA-PCPG")
+  plot(den, main = title) 
+
+```
+
+
+```{r, eval=FALSE}
+name_proj <- names(f)
+#Taking out the "TCGA-PCPG" cohort since the values for the Y chromosome index are not okay
+name_proj <- name_proj[-14]
+```
+
+The CNI Data is now introduced in a loop prepared to calculate the LoY status of each patient, in this case we have used 0.5 as the threshold under which a patient is considered to have a Loss of the Y chromosome:
+
+```{r, eval=FALSE}
+hs <- list()
+for (proj in name_proj) {
+TCGA_BLCA <- do.call(rbind.data.frame, f[proj])
+  name <- rownames(TCGA_BLCA)
+  name <- substr(name,11,22)
+  rownames(TCGA_BLCA) <- name
+  LoY1 <- TCGA_BLCA[TCGA_BLCA$Y < 0.5,]
+  i <- which(rownames(TCGA_BLCA) %in% rownames(LoY1))
+  LoY <- c(1:length(rownames(TCGA_BLCA)))
+  LoY[i] <- c("Yes")
+  LoY[-i] <- c("No")
+  LoY <- as.data.frame(LoY)
+  colnames(LoY) <- c("LoY")
+  rownames(LoY) <- name
+  hs[[paste0(proj)]] <- LoY
+}
+```
+
+The only cohort that has no "Yes" value for LoY among all the cohorts its TCGA-THYM, the loop created is not working for cohorts in which this happens so we would replace this manually:
+
+```{r}
+hs <- hs[-21]
+TCGA_BLCA <- do.call(rbind.data.frame, x[22])
+  name <- rownames(TCGA_BLCA)
+  name <- substr(name,11,22)
+  rownames(TCGA_BLCA) <- name
+  LoY <- replicate(length(rownames(TCGA_BLCA)), "No")
+  LoY <- as.data.frame(LoY)
+  colnames(LoY) <- c("LoY")
+  rownames(LoY) <- name
+```
+
+```{r}
+hs[["TCGA-THYM"]] <- LoY
+```
+
+A list of datasets with LoY Status Data for each project is generated and stored as a rdata object:
+
+```{r}
+list.save(hs, 'TCGA_onlymalemore50_LoYstatus.rdata')
+```
+
+```{r}
+hs <- list()
+for (proj in name_proj) {
+TCGA_BLCA <- do.call(rbind.data.frame, hs[proj])
+  LoY <- TCGA_BLCA[TCGA_BLCA$Y < 0.5,]
+  name <- rownames(LoY)
+  name <- substr(name,11,22)
+  rownames(LoY) <- name
+  clinical <- do.call(rbind.data.frame, projects[proj])
+  i <- which(duplicated(clinical$case_submitter_id))
+  clinical <- clinical[-i,]
+  i <- which(clinical$case_submitter_id %in% rownames(LoY))
+  LoY <- c(1:length(clinical$case_submitter_id))
+  LoY[i] <- c("Yes")
+  LoY[-i] <- c("No")
+  clinical$LoY <- LoY
+  hs[[paste0(proj)]] <- clinical
+}
+
+```
+
+
+```{r}
+hs <- list()
+for (proj in name_proj) {
+TCGA_BLCA <- do.call(rbind.data.frame, x[proj])
+  LoY <- TCGA_BLCA[TCGA_BLCA$Y < 0.5,]
+  name <- rownames(LoY)
+  name <- substr(name,11,22)
+  rownames(LoY) <- name
+  clinical <- do.call(rbind.data.frame, projects[proj])
+  i <- which(duplicated(clinical$case_submitter_id))
+  clinical <- clinical[-i,]
+  i <- which(clinical$case_submitter_id %in% rownames(LoY))
+  LoY <- c(1:length(clinical$case_submitter_id))
+  LoY[i] <- c("Yes")
+  LoY[-i] <- c("No")
+  clinical$LoY <- LoY
+  hs[[paste0(proj)]] <- clinical
+}
+
+```
+
+```{r}
+list.save(hs, 'TCGA_onlymalemore50_clinicalndLoYstatus.rdata')
+```
+
+```{r}
+clinicaldata <- do.call(rbind.data.frame, x)
+```
+
+```{r}
+rownames(clinicaldata) <- clinicaldata$case_submitter_id
+```
+
+```{r}
+clinicaldata <- clinicaldata[sort(rownames(clinicaldata)),]
+```
+
+```{r}
+countdata <- do.call(cbind.data.frame, x)
+```
+
+
+```{r}
+name <- colnames(countdata)
+name <- gsub("TCGA-BLCA.", "", name)
+colnames(countdata) <- name 
+```
+
+```{r}
+name <- colnames(countdata)
+name <- substr(name, 1,12)
+colnames(countdata) <- name 
+```
+
+```{r}
+head(colnames(countdata))
+```
+
+## Calculating TPM values for all the cohorts
+
+```{r}
+library(GenomicFeatures)
+```
+
+
+```{r}
+name_proj <- names(x)
+y <- list()
+txdb <- makeTxDbFromGFF("gencode.v38.annotation.gtf")
+all.genes <- genes(txdb)
+```
+
+
+```{r}
+for (proj in name_proj) {
+  TCGA_BLCA <- do.call(rbind.data.frame, x[proj])
+  
+  name <- colnames(TCGA_BLCA)
+  name <- gsub(paste0(proj, "."), "", name)
+  colnames(TCGA_BLCA) <- name
+  
+  name <- rownames(TCGA_BLCA)
+  name <- gsub(paste0(proj, "."), "", name)
+  rownames(TCGA_BLCA) <- name
+  
+  name <- colnames(TCGA_BLCA)
+  name <- substr(name, 1,12)
+  colnames(TCGA_BLCA) <- name
+  
+  my.genes <- rownames(TCGA_BLCA)
+  exons.list.per.gene <- exonsBy(txdb,by="gene")
+  exonic.gene.sizes <- as.data.frame(sum(width(reduce(exons.list.per.gene))))
+  exonic.gene.sizes <- exonic.gene.sizes[my.genes,]
+  names(exonic.gene.sizes) <- my.genes
+  
+    tpm3 <- function(counts,len) {
+ 
+    x <- counts/len
+    x <- na.omit(x)
+  
+    return(t(t(x)*1e6/colSums(x)))
+ 
+    }
+    
+    TCGA_TPM <- as.data.frame(tpm3(as.matrix(TCGA_BLCA), exonic.gene.sizes))
+    
+  y[[paste0(proj)]] <- TCGA_TPM
+}
+```
+
+```{r}
+list.save(y, 'TCGA_onlymalemore50_TPM_ENSMBL.rdata')
+```
+
+```{r}
+name_proj <- names(y)
+s <- list()
+for (proj in name_proj) {
+  TCGA_BLCA <- do.call(rbind.data.frame, y[proj])
+  
+  name <- colnames(TCGA_BLCA)
+  name <- gsub(paste0(proj, "."), "", name)
+  colnames(TCGA_BLCA) <- name
+  
+  name <- rownames(TCGA_BLCA)
+  name <- gsub(paste0(proj, "."), "", name)
+  rownames(TCGA_BLCA) <- name
+  
+  name <- colnames(TCGA_BLCA)
+  name <- substr(name, 1,12)
+  colnames(TCGA_BLCA) <- name 
+  
+  symbol_count <- TCGA_BLCA
+
+  symbol_count$symbol <- mapIds(org.Hs.eg.db,
+                     keys=rownames(symbol_count),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+  symbol_count <- aggregate(. ~ symbol, data = symbol_count, max)
+  rownames(symbol_count) <- symbol_count$symbol
+  
+  symbol_count <- symbol_count[,-1]
+  
+  s[[paste0(proj)]] <- symbol_count
+}
+```
+```{r}
+list.save(s, 'TCGA_onlymalemore50_TPM_SYMBOL.rdata')
+```
+
+```{r}
+counts_Y_sort <- counts_Y_new[,sort(colnames(counts_Y_new))]
+```
+
+
+```{r}
+name_proj <- names(x)
+y <- list()
+for (proj in name_proj) {
+  TCGA_BLCA <- do.call(rbind.data.frame, x[proj])
+  
+  name <- colnames(TCGA_BLCA)
+  name <- gsub(paste0(proj, "."), "", name)
+  colnames(TCGA_BLCA) <- name
+  
+  name <- rownames(TCGA_BLCA)
+  name <- gsub(paste0(proj, "."), "", name)
+  rownames(TCGA_BLCA) <- name
+  
+  name <- colnames(TCGA_BLCA)
+  name <- substr(name, 1,12)
+  colnames(TCGA_BLCA) <- name 
+  
+  symbol_count <- TCGA_BLCA
+
+  symbol_count$symbol <- mapIds(org.Hs.eg.db,
+                     keys=rownames(symbol_count),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+  symbol_count <- aggregate(. ~ symbol, data = symbol_count, max)
+  rownames(symbol_count) <- symbol_count$symbol
+  
+  symbol_count <- symbol_count[,-1]
+  
+  y[[paste0(proj)]] <- symbol_count
+}
+```
+```{r}
+list.save(y, 'TCGA_onlymalemore50_symbol.rdata')
+```
+
+```{r}
+library(org.Hs.eg.db)
+```
+
+```{r}
+symbol_count <- countdata
+```
+
+```{r}
+symbol_count$symbol <- mapIds(org.Hs.eg.db,
+                     keys=rownames(symbol_count),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+```{r}
+symbol_count <- aggregate(. ~ symbol, data = symbol_count, max)
+row.names(symbol_count) <- symbol_count$symbol
+```
+
+```{r}
+symbol_count <- symbol_count[,1]
+```
+
+```{r}
+symbol_count <- symbol_count[,-1]
+```
+
+```{r}
+library
+```
+
+
+```{r}
+write.csv(symbol_count, "all_male_counts_symbol.cvs")
+```
+
+```{r}
+for (proj in name_proj) {
+  name <- colnames(symbol_count)
+  tag <- paste0(proj, ".")
+  name <- gsub(tag, "", name)
+  colnames(symbol_count) <- name 
+}
+```
+
+```{r}
+name <- colnames(symbol_count)
+name <- substr(name,1,12)
+colnames(symbol_count) <- name 
+```
+
+```{r}
+i <- which(colnames(symbol_count) %in% clinicaldata$case_submitter_id)
+```
+
+```{r}
+i <- which(clinicaldata$case_submitter_id %in% colnames(symbol_count))
+```
+
+```{r}
+clinicaldatacommon <- clinicaldata[i,]
+```
+
+```{r}
+i <- which(colnames(symbol_count) %in% rownames(clinicaldatacommon))
+```
+
+```{r}
+symbolcommon <- symbol_count[,rownames(clinicaldatacommon)]
+```
+
+```{r}
+i <- which(colnames(countdata) %in% clinicaldata$case_submitter_id)
+```
+
+```{r}
+name <- colnames(countdata)
+name <- substr(name,1,12)
+colnames(countdata) <- name 
+```
+
+
+
+```{r}
+i <- which(male_ID$Patient_ID %in% rownames(LoY))
+i
+```
+
+```{r}
+LoY <- c(1:length(male_ID$Patient_ID))
+LoY[i] <- c("Yes")
+LoY[-i] <- c("No")
+```
+
+```{r}
+male_ID$LoY <- LoY
+```
+```
+
+
+```{r}
+patients <- split(TCGA_BLCA, f = TCGA_BLCA$Sample)
+  name <- names(patients)
+  i <- which(is.duplicated(name))
+  patients <- patients[-i]
+```
+
+
+
+
+Create Sizes for the segments: Chromosome End - Chromosome Star:
+
+```{r}
+HNSC_SegmentFiles$Size <- HNSC_SegmentFiles$End - HNSC_SegmentFiles$Start
+```
+
+Look for patients that have more than one sample and cleaning it up:
+
+```{r}
+patients <- split(HNSC_SegmentFiles, f = HNSC_SegmentFiles$Sample)
+```
+
+Giving patients the same ID as other datasets:
+
+```{r}
+name <- names(patients)
+```
+
+```{r}
+name <- substring(name, 1, 12)
+```
+
+```{r}
+name <- gsub("-", ".", name)
+```
+
+```{r}
+duplicated(name) 
+```
+
+Taking out duplicated data:
+
+```{r}
+HNSC_SegmentFiles <- HNSC_SegmentFiles[HNSC_SegmentFiles$Sample != "TCGA-CV-6955-01A-11D-2062-01",]
+```
+
+```{r}
+HNSC_SegmentFiles <- HNSC_SegmentFiles[HNSC_SegmentFiles$Sample != "TCGA-CV-6956-01A-21D-2062-01",]
+```
+
+Renaming the patients with an ID matching the metadata:
+
+```{r}
+HNSC_SegmentFiles$Sample <- substring(HNSC_SegmentFiles$Sample, 1, 12)
+HNSC_SegmentFiles$Sample <- gsub("-", ".", HNSC_SegmentFiles$Sample)
+```
+
+### In male patients
+
+Selecting the male patients:
+
+```{r}
+SegmentFiles_Male <- HNSC_SegmentFiles[HNSC_SegmentFiles$Sample %in% male_ID$Patient_ID,]
+```
+
+Unlogging the segment_mean variable to obtain Copy Number:
+
+```{r}
+SegmentFiles_Male$Unlog_Segment <- 2^(1+SegmentFiles_Male$Segment_Mean)
+```
+
+Weighting the segment_mean by the sizes of the segments:
+
+```{r}
+SegmentFiles_Male$Weighted_value <- SegmentFiles_Male$Unlog_Segment*SegmentFiles_Male$Size
+```
+
+Separating the patients in a list in order for the loop to work:
+
+```{r}
+patients_male <- split(SegmentFiles_Male, f = SegmentFiles_Male$Sample )
+```
+
+Loop that calculates the average Copy Number Index per Chromosome inside each patient:
+
+```{r}
+ID <- names(patients_male)
+a <- c(1:22, "X", "Y")
+x <- list()
+for (h in (1:length(patients_male))) {
+  vec <- c()
+  for (i in a) {
+    mean <- sum(patients_male[[h]]$Weighted_value[patients_male[[h]]$Chromosome %in% i])/sum(patients_male[[h]]$Size[patients_male[[h]]$Chromosome %in% i])
+    vec <- c(vec,mean)
+  }
+  names(vec) <- c(1:22, "X", "Y")
+  x[[paste0(ID[h])]] <- vec
+}
+
+```
+
+Unlisting the result to obtain a data frame with the CNI for each Chromosome for each patient:
+
+```{r}
+chrom_male <- do.call(rbind.data.frame, x)
+colnames(chrom_male) <- a
+rownames(chrom_male) <- ID
+```
+
+Plotting the CNI for all the Male patients:
+
+```{r}
+den <- density(chrom_male$Y)
+plot(den, xlim = c(0,2))
+```
+Obtaining the data in common patients for Percentage Tumor Nuclei and Chromosome Number Index:
+
+```{r}
+data3 <- data2[data2$ID %in% rownames(chrom_male),]
+```
+
+```{r}
+chrom_male1 <- chrom_male[data3$ID,]
+```
+
+Weighting Chromosome Number Index by Percentage tumor nuclei:
+
+```{r}
+chrom_male2 <- (chrom_male1 + (data3$x/100) - 1)/(data3$x/100)
+```
+
+Saving the data:
+
+```{r}
+write.table(chrom_male2, "/Users/cristinacondel/Desktop/Gender_COX2/Male_CopyNumberIndex.txt", sep = "\t", row.names = F, quote = F)
+```
+
+Plotting weighted Y chromosome for male patients:
+
+```{r}
+den <- density(chrom_male2$`Y`)
+plot(den, xlim = c(0,2), xlab = "ChrY Copy Number Index")
+```
+
+From this graph we can extract that we have successfully replicated what was done in the analysis by Hollows et al. 
+
+Calculating the maximum points of the graph:
+
+```{r}
+which.max(den$y)
+den$x[110]
+```
+
+```{r}
+which.max(den$y[den$x < 0.75])
+den$x[72]
+```
+
+```{r}
+den <- density(chrom_male2$`X`)
+plot(den)
+```
+
+```{r}
+LoY <- chrom_male2[chrom_male2$Y < 0.4803115,]
+```
+
+```{r}
+i <- which(male_ID$Patient_ID %in% rownames(LoY))
+i
+```
+
+```{r}
+LoY <- c(1:length(male_ID$Patient_ID))
+LoY[i] <- c("Yes")
+LoY[-i] <- c("No")
+```
+
+```{r}
+male_ID$LoY <- LoY
+```
+
+
+### Doing the same process for the female patients:
+
+```{r}
+Female_ID <- TCGA_Masterfile[TCGA_Masterfile$Gender == "Female",]
+```
+
+```{r}
+SegmentFiles_Female <- HNSC_SegmentFiles[HNSC_SegmentFiles$Sample %in% Female_ID$Patient_ID,]
+```
+
+```{r}
+SegmentFiles_Female$Unlog_Segment <- 2^(1+SegmentFiles_Female$Segment_Mean)
+```
+
+```{r}
+SegmentFiles_Female$Weighted_value <- SegmentFiles_Female$Unlog_Segment*SegmentFiles_Female$Size
+```
+
+```{r}
+patients_Female <- split(SegmentFiles_Female, f = SegmentFiles_Female$Sample )
+```
+
+```{r}
+ID <- names(patients_Female)
+a <- c(1:22, "X", "Y")
+x <- list()
+for (h in (1:length(patients_Female))) {
+  vec <- c()
+  for (i in a) {
+    mean <- sum(patients_Female[[h]]$Weighted_value[patients_Female[[h]]$Chromosome %in% i])/sum(patients_Female[[h]]$Size[patients_Female[[h]]$Chromosome %in% i])
+    vec <- c(vec,mean)
+  }
+  names(vec) <- c(1:22, "X", "Y")
+  x[[paste0(ID[h])]] <- vec
+}
+
+```
+
+```{r}
+chrom_Female <- do.call(rbind.data.frame, x)
+```
+
+```{r}
+colnames(chrom_Female) <- a
+rownames(chrom_Female) <- ID
+```
+
+```{r}
+write.table(chrom_Female, "/Users/cristinacondel/Desktop/Gender_COX2/Female_CopyNumberIndex.txt", sep = "\t", row.names = T, quote = T)
+```
+
+```{r}
+den <- density(chrom_Female$Y)
+plot(den)
+```
+
+```{r}
+den <- density(chrom_Female$X)
+plot(den)
+```
+
+
+
+# Y chromosome signature expression
+
+We now check for the expression of our Y chromosome signature overlapping with the computed status of EDY and LoY
+
+First we stablish the signature:
+
+```{r}
+Y_sig <- c("DDX3Y",	"EIF1AY",	"KDM5D",	"NLGN4Y",	"RPS4Y1",	"SRY",	"TBL1Y",	"TMSB4Y","USP9Y",	"UTY",	"ZFY")
+```
+
+```{r}
+
+```
+
+
+Select the genes for the count table and prepare the count table to be read by the pheatmap() function:
+
+```{r}
+i <- which(rownames(Counts_symbol) %in%  Y_sig)
+counts_Y <- Counts_symbol[i,]
+```
+
+```{r}
+names <- rownames(counts_Y)
+counts_Y <- as.data.frame(apply( counts_Y, 2, as.numeric))
+rownames(counts_Y) <- names
+```
+
+
+```{r}
+ library(pheatmap)
+  choose_matrix=counts_Y
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))  
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(LoY = EDYLoY$LoY, EDY = EDYLoY$EDY)
+  rownames(annotation_col)=colnames(counts_Y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = T
+           #,filename = 'CellLine_LOY_EDY_Signature_HN_SCC.png'
+           )
+  
+```
+
+```{r}
+download.file("https://tcga-xena-hub.s3.us-east-1.amazonaws.com/download/survival%2FBLCA_survival.txt", "/Users/cristinacondel/Desktop/Gender_Analysis/Male/TCGA_allmales/survival/TCGA-BCLA-survival.txt")
+```
+
