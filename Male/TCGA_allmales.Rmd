@@ -1,0 +1,245 @@
+---
+title: "Untitled"
+author: "Cristina Conde Lopez"
+date: "3/11/2022"
+output: html_document
+---
+
+```{r}
+counts_Y <- read_csv("/Users/cristinacondel/Desktop/Gender_Analysis/Male/TCGA_allmales/clinical/all_male_counts_symbol.cvs")
+```
+```{r}
+colnames(counts_Y)[1] <- c("symbol")
+```
+
+```{r}
+names <- counts_Y$symbol
+counts_Y <- counts_Y[,-1]
+rownames(counts_Y) <- names
+```
+
+# Y chromosome signature expression
+
+We now check for the expression of our Y chromosome signature overlapping with the computed status of EDY and LoY
+
+First we stablish the signature:
+
+```{r}
+Y_sig <- c("DDX3Y",	"EIF1AY",	"KDM5D",	"NLGN4Y",	"RPS4Y1",	"SRY",	"TBL1Y",	"TMSB4Y","USP9Y",	"UTY",	"ZFY")
+```
+
+Select the genes for the count table and prepare the count table to be read by the pheatmap() function:
+
+```{r}
+j <- list()
+for (proj in name_proj) {
+  TCGA_BLCA <- do.call(rbind.data.frame, s[proj])
+  
+  name <- colnames(TCGA_BLCA)
+  name <- gsub(paste0(proj, "."), "", name)
+  colnames(TCGA_BLCA) <- name
+  
+  name <- rownames(TCGA_BLCA)
+  name <- gsub(paste0(proj, "."), "", name)
+  rownames(TCGA_BLCA) <- name
+  
+  name <- colnames(TCGA_BLCA)
+  name <- substr(name, 1,12)
+  colnames(TCGA_BLCA) <- name 
+  
+  i <- which(rownames(TCGA_BLCA) %in%  Y_sig)
+  counts_Y <- TCGA_BLCA[i,]
+  
+  j[[paste0(proj)]] <- counts_Y
+}
+```
+
+```{r}
+i <- which(rownames(counts_Y) %in%  Y_sig)
+counts_Y <- counts_Y[i,]
+```
+
+```{r}
+names <- rownames(counts_Y)
+counts_Y <- as.data.frame(apply( counts_Y, 2, as.numeric))
+rownames(counts_Y) <- names
+```
+
+```{r}
+name_proj <- names(x)
+```
+
+```{r}
+hj <- x
+```
+
+```{r}
+for (proj in name_proj) {
+  TCGA_BLCA <- do.call(rbind.data.frame, x[proj])
+  name <- rownames(TCGA_BLCA)
+  name <- substr(name,11,22)
+  rownames(TCGA_BLCA) <- name
+  i <- which(colnames(counts_Y) %in% rownames(TCGA_BLCA))
+  counts_Y_new <- counts_Y[,i]
+  i <- which(rownames(TCGA_BLCA) %in% colnames(counts_Y_new))
+  TCGA_BLCA_new <- as.data.frame(TCGA_BLCA[i,])
+  colnames(TCGA_BLCA_new) <- c("LoY")
+  rownames(TCGA_BLCA_new) <- rownames(TCGA_BLCA)[i]
+  library(pheatmap)
+  choose_matrix=counts_Y_new
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))  
+  ## http://www.bio-info-trainee.com/1980.html
+  file = paste0(proj, "_LoY_Y_expression_2", ".png")
+  annotation_col = data.frame(LoY = TCGA_BLCA_new$LoY)
+  rownames(annotation_col)=colnames(counts_Y_new)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = T
+           ,filename = file
+           )
+}
+```
+
+```{r}
+j <- j[-14]
+```
+
+
+```{r}
+name_proj[17]
+```
+
+```{r}
+r <- x
+```
+
+
+```{r}
+#start with LoY status and survival lists and Y genes for TCGA
+for (proj in name_proj[22]) {
+  
+  TCGA_BLCA <- do.call(rbind.data.frame, x[proj])
+  name <- rownames(TCGA_BLCA)
+  tag <- paste0(proj, ".")
+  name <- gsub(tag, "", name)
+  
+  rownames(TCGA_BLCA) <- name
+  
+  survival <- do.call(rbind.data.frame, hj[proj])
+  survival$sample_type <- substr(survival$sample, 14,15)
+  survival <- survival[survival$sample_type == "01",]
+  
+  counts_Y <- do.call(rbind.data.frame, j[proj])
+  
+  name <- colnames(counts_Y)
+  name <- gsub(paste0(proj, "."), "", name)
+  colnames(counts_Y) <- name
+  
+  name <- rownames(counts_Y)
+  name <- gsub(paste0(proj, "."), "", name)
+  rownames(counts_Y) <- name
+  
+  name <- colnames(counts_Y)
+  name <- substr(name, 1,12)
+  colnames(counts_Y) <- name 
+  
+  i <- which(colnames(counts_Y) %in% rownames(TCGA_BLCA))
+  counts_Y_new <- counts_Y[,i]
+  
+  counts_Y_new <- counts_Y_new[,sort(colnames(counts_Y_new))]
+  
+  i <- which(rownames(TCGA_BLCA) %in% colnames(counts_Y_new))
+  TCGA_BLCA_new <- as.data.frame(TCGA_BLCA[i,])
+  
+  colnames(TCGA_BLCA_new) <- c("LoY")
+  rownames(TCGA_BLCA_new) <- rownames(TCGA_BLCA)[i]
+  
+  i <- which(survival$`_PATIENT` %in% colnames(counts_Y_new))
+  survival_new <- as.data.frame(survival[i,])
+  
+  library(pheatmap)
+  
+  choose_matrix=counts_Y_new
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))  
+  ## http://www.bio-info-trainee.com/1980.html
+  
+  file = paste0(proj, "_LoY_Y_TPM_expression_cluster", ".png")
+  annotation_col = data.frame(LoY = TCGA_BLCA_new$LoY)
+  rownames(annotation_col)=colnames(counts_Y_new)
+  clustering <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = T
+           ,filename = file, cluster_cols = clustering, cutree_cols = 3
+           )
+  
+  t1 <- cutree(clustering, 3)
+  survival_new$Y_expres <- factor(t1, levels = c(1,2,3), labels = c("High","Low","Very_Low"))
+
+
+  library(survival)
+  library(survminer)
+  surv_object0 <- Surv(time = survival_new$OS.time, event = as.double(survival_new$OS))
+  fit00 <- survfit(surv_object0 ~ Y_expres, data = survival_new)
+  file <- paste0("/Users/cristinacondel/Desktop/Gender_Analysis/Male/TCGA_allmales/survival/survivalgroups_", proj, ".pdf")
+  title = paste0(proj, " OS")
+  survp <- ggsurvplot(fit00, data = survival_new, pval = TRUE, title = "OS", risk.table = TRUE)
+  pdf(file)
+  print(survp, newpage = FALSE)
+  dev.off()
+
+}
+```
+   
+```{r}
+table(survival_new$Y_expres)
+```
+
+```{r}
+name_proj <- names(r)
+```
+
+```{r}
+#start with LoY status and survival lists
+for (proj in name_proj[21]) {
+  
+  TCGA_BLCA <- do.call(rbind.data.frame, r[proj])
+  name <- rownames(TCGA_BLCA)
+  tag <- paste0(proj, ".")
+  name <- gsub(tag, "", name)
+  
+  
+  rownames(TCGA_BLCA) <- name
+  
+  survival <- do.call(rbind.data.frame, x[proj])
+  survival$sample_type <- substr(survival$sample, 14,15)
+  survival <- survival[survival$sample_type == "01",]
+  
+  i <- which(survival$`_PATIENT` %in% rownames(TCGA_BLCA))
+  survival_new <- as.data.frame(survival[i,])
+   
+  i <- which(rownames(TCGA_BLCA) %in% survival$`_PATIENT`)
+  TCGA_BLCA_new <- as.data.frame(TCGA_BLCA[i,])
+  
+  colnames(TCGA_BLCA_new) <- c("LoY")
+  rownames(TCGA_BLCA_new) <- rownames(TCGA_BLCA)[i]
+  
+  survival_new$LoY <- TCGA_BLCA_new$LoY
+  
+  library(survival)
+  library(survminer)
+  surv_object0 <- Surv(time = survival_new$OS.time, event = as.double(survival_new$OS))
+  fit00 <- survfit(surv_object0 ~ LoY, data = survival_new)
+  file <- paste0("/Users/cristinacondel/Desktop/Gender_Analysis/Male/TCGA_allmales/survival/survivalLoY_", proj, ".pdf")
+  title = paste0(proj, " OS")
+  survp <- ggsurvplot(fit00, data = survival_new, pval = TRUE, title = "OS", risk.table = TRUE)
+  pdf(file)
+  print(survp, newpage = FALSE)
+  dev.off()
+  
+}
+```
+
+
+
+
+
+
