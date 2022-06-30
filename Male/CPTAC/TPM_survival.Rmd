@@ -1,0 +1,262 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+## Raw count data
+
+```{r}
+Counts <- read.csv(file="/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC/CPTAC_3_counts.csv")
+```
+
+```{r}
+rownames(Counts) <- Counts$X
+Counts <- Counts[,c(-1)]
+```
+
+```{r}
+names <- substr(colnames(Counts), 1, 9)
+colnames(Counts) <- names
+```
+
+## Clinical data
+
+We upload the curated metadata info extrated from the LoY pipeline:
+
+```{r, message=FALSE, warning=FALSE}
+LoY <- read.csv("/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC/CPTAC_clinical_HNSSC_male_LoY.csv")
+```
+
+## Calculating TPM values
+
+```{r}
+library(GenomicFeatures)
+```
+
+```{r}
+txdb <- makeTxDbFromGFF("gencode.v38.annotation.gtf")
+all.genes <- genes(txdb)
+```
+
+```{r}
+  my.genes <- rownames(Counts)
+  exons.list.per.gene <- exonsBy(txdb,by="gene")
+  exonic.gene.sizes <- as.data.frame(sum(width(reduce(exons.list.per.gene))))
+  exonic.gene.sizes <- exonic.gene.sizes[my.genes,]
+  names(exonic.gene.sizes) <- my.genes
+  
+    tpm3 <- function(counts,len) {
+ 
+    x <- counts/len
+    x <- na.omit(x)
+  
+    return(t(t(x)*1e6/colSums(x)))
+ 
+    }
+    
+    CPTAC_TPM <- as.data.frame(tpm3(as.matrix(Counts), exonic.gene.sizes))
+```
+
+```{r}
+write.csv(as.data.frame(CPTAC_TPM), 
+          file="/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC/CPTAC_3_TPM.csv")
+```
+
+
+```{r}
+library(org.Hs.eg.db)
+```
+
+```{r}
+nrow(CPTAC_TPM)
+keep <- rowSums(CPTAC_TPM) > 0
+CPTAC_TPM_expressed <- CPTAC_TPM[keep,]
+nrow(CPTAC_TPM_expressed)
+```
+
+
+```{r}
+CPTAC_TPM_expressed$symbol <- mapIds(org.Hs.eg.db,
+                     keys=rownames(CPTAC_TPM_expressed),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+
+```{r}
+TPM_symbol_1 <- aggregate(x = CPTAC_TPM_expressed[ , colnames(CPTAC_TPM_expressed) != "symbol"],             # Mean by group
+          by = list(CPTAC_TPM_expressed$symbol),
+          FUN = max)
+```
+
+```{r}
+row.names(TPM_symbol_1) <- TPM_symbol_1$Group.1
+```
+
+```{r}
+TPM_symbol_1 <- TPM_symbol_1[,c(-1)]
+```
+
+# Y chromosome signature expression
+
+We now check for the expression of our Y chromosome signature overlapping with the computed status of EDY and LoY
+
+First we stablish the signature:
+
+```{r}
+Y_sig <- c("DDX3Y",	"EIF1AY",	"KDM5D",	"NLGN4Y",	"RPS4Y1",	"SRY",	"TBL1Y",	"TMSB4Y","USP9Y",	"UTY",	"ZFY")
+```
+
+Select the genes for the count table and prepare the count table to be read by the pheatmap() function:
+
+```{r}
+i <- which(rownames(TPM_symbol_1) %in%  Y_sig)
+counts_Y <- TPM_symbol_1[i,]
+```
+
+```{r}
+names <- rownames(counts_Y)
+counts_Y <- as.data.frame(apply( counts_Y, 2, as.numeric))
+rownames(counts_Y) <- names
+```
+
+```{r}
+i <- which(colnames(counts_Y) %in% LoY$submitter_id)
+counts_Y_male <- counts_Y[,i]
+```
+
+```{r}
+i <- which(LoY$submitter_id %in% colnames(counts_Y_male))
+LoY_male <- LoY[i,]
+```
+
+
+```{r}
+ library(pheatmap)
+  choose_matrix=counts_Y_male
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))  
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(LoY_male = LoY_male$LoY)
+  rownames(annotation_col)=colnames(counts_Y_male)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = T
+           #,filename = 'CellLine_LOY_EDY_Signature_HN_SCC.png'
+           )
+  
+```
+
+
+```{r}
+ library(pheatmap)
+  choose_matrix=counts_Y_male
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))  
+  ## http://www.bio-info-trainee.com/1980.html
+  clustering <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  annotation_col = data.frame(LoY_male = LoY_male$LoY)
+  rownames(annotation_col)=colnames(counts_Y_male)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = T, cluster_cols = clustering, cutree_cols = 3
+           #,filename = 'CPTAC_LOY_Signature_HN_SCC.png'
+           )
+  
+```
+
+```{r}
+t1 <- cutree(clustering, 3)
+LoY_male$Y_expres <- factor(t1, levels = c(1,2,3), labels = c("Very_Low","High", "Low"))
+```
+
+```{r}
+table(LoY_male$Y_expres)
+```
+
+```{r}
+library(xlsx)
+```
+
+```{r}
+library(readxl)
+clinical <- read_excel("CPTAC_CLINICAL_DATA.xlsx")
+```
+
+```{r}
+clinical <- clinical[-1,]
+```
+
+```{r}
+names <- gsub("-", ".", clinical$case_id)
+clinical$case_id <- names
+```
+
+```{r}
+rownames(LoY_male) <- LoY_male$submitter_id
+```
+
+```{r}
+LoY_male <- LoY_male[sort(rownames(LoY_male)),]
+```
+
+```{r}
+i <- which(clinical$case_id %in% rownames(LoY_male))
+clinical_final <- clinical[i,]
+```
+
+```{r}
+i <- which( rownames(LoY_male) %in% clinical_final$case_id)
+LoY_male1 <- LoY_male[i,]
+```
+
+```{r}
+clinical_final$case_id == rownames(LoY_male1)
+```
+
+
+```{r}
+clinical_final$LoY <- LoY_male1$LoY
+```
+
+```{r}
+clinical_final$Y_expres <- LoY_male1$Y_expres
+```
+
+```{r}
+survival <- data.frame(Time = clinical_final$overall_survival, Status = clinical_final$overall_free_status, Y_expres = clinical_final$Y_expres)
+```
+
+```{r}
+survival <- na.omit(survival)
+```
+
+
+
+
+
+```{r}
+library(survival)
+library(survminer)
+file <- c("/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC/survival_groups.pdf")
+surv_object0 <- Surv(time = as.numeric(clinical_final$overall_survival), event = as.double(clinical_final$overall_free_status))
+fit00 <- survfit(surv_object0 ~ Y_expres, data = clinical_final)
+survp <-ggsurvplot(fit00, data = clinical_final, pval = TRUE, title = "OS", risk.table = TRUE)
+pdf(file)
+print(survp, newpage = FALSE)
+dev.off()
+```
+
+```{r}
+library(survival)
+library(survminer)
+file <- c("/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC/survival_LoY.pdf")
+surv_object0 <- Surv(time = as.numeric(clinical_final$overall_survival), event = as.double(clinical_final$overall_free_status))
+fit00 <- survfit(surv_object0 ~ LoY, data = clinical_final)
+survp <-ggsurvplot(fit00, data = clinical_final, pval = TRUE, title = "OS", risk.table = TRUE)
+pdf(file)
+print(survp, newpage = FALSE)
+dev.off()
+```
+
+
+
+
+
+

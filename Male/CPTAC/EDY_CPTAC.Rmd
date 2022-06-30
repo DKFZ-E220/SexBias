@@ -1,0 +1,460 @@
+---
+title: "EDY Analysis CPTAC-HNSCC"
+subtitle: "Stablishing EDY status"
+author: "Cristina Conde López"
+date: "`r Sys.Date()`"
+output: 
+ prettydoc::html_pretty:
+    toc: true
+    theme: hpstr
+    highlight: github
+    number_sections: true
+ pdf_document:
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+---
+
+# Obtain the Data from TCGABiolinks
+
+## Raw count data
+
+This data was downloaded on the 2nd of March 2022 using the different tools provided by TCGABiolinks to download data from GDC Portal:
+
+Loading of package TCGAbiolink (download raw data)
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("TCGAbiolinks")
+```
+
+```{r}
+library (TCGAbiolinks)
+```
+
+In this case selecting head and neck cancer, transcriptome profiling data --> gene expression quatification, data type in counts.
+
+```{r eval=FALSE}
+query <- GDCquery(project = 'CPTAC-3',
+data.category = "Transcriptome Profiling",
+data.type = "Gene Expression Quantification",
+workflow.type = "HTSeq - Counts", sample.type = "Primary Tumor")
+GDCdownload(query)
+```
+
+GDCprepare converts the data downloaded into an R file
+
+```{r eval=FALSE}
+CPTAC_HTseqSE <- GDCprepare(query, save = TRUE, save.filename =
+"CPTAC_3_HTseq.rda")
+```
+
+Extracting the counts (under assay) using SummarizedExperiment from the HNSC_HTseqSE object
+
+```{r eval=FALSE}
+Counts <- as.data.frame(SummarizedExperiment::assay(CPTAC_HTseqSE))
+```
+
+Writing the table into the working directory:
+
+```{r eval=FALSE}
+names <- substr(colnames(Counts), 1, 9)
+colnames(Counts) <- names
+write.csv(as.data.frame(Counts), 
+          file="/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC/CPTAC_3_counts.csv")
+```
+
+```{r}
+Counts <- read.csv(file="/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC/CPTAC_3_counts.csv")
+```
+
+```{r}
+rownames(Counts) <- Counts$X
+Counts <- Counts[,c(-1)]
+```
+
+```{r}
+names <- substr(colnames(Counts), 1, 9)
+colnames(Counts) <- names
+```
+
+```{r}
+
+```
+
+```{r}
+library(org.Hs.eg.db)
+```
+
+```{r}
+Counts$symbol <- mapIds(org.Hs.eg.db,
+                     keys=rownames(Counts),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+
+```{r}
+Counts_symbol <- aggregate(x = Counts[ , colnames(Counts) != "symbol"],             # Mean by group
+          by = list(Counts$symbol),
+          FUN = max)
+row.names(Counts_symbol) <- Counts_symbol$symbol
+```
+
+```{r}
+names <- substr(colnames(Counts_symbol),1,9) 
+```
+
+```{r}
+colnames(Counts_symbol) <- names
+```
+
+```{r}
+Counts_symbol <- Counts_symbol[,c(-1,-2)]
+```
+
+## Clinical data
+
+We upload the curated metadata info extrated from the LoY pipeline:
+
+```{r, message=FALSE, warning=FALSE}
+LoY <- read.csv("/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC/CPTAC_clinical_HNSSC_male_LoY.csv")
+```
+
+```{r}
+LoY$submitter_id <- gsub("-", ".", LoY$submitter_id)
+```
+
+We extract the selected samples from the count file:
+
+```{r}
+i <- which(colnames(Counts) %in% LoY$submitter_id)
+Counts_male <- Counts[,i]
+```
+
+```{r}
+Counts_male <- Counts_male[, sort(colnames(Counts_male))]
+```
+
+
+```{r}
+i <- which(LoY$submitter_id %in% colnames(Counts))
+LoY_overlap <- LoY[i,]
+rownames(LoY_overlap) <- LoY_overlap$submitter_id
+```
+
+```{r}
+LoY_overlap <- LoY_overlap[sort(rownames(LoY_overlap)),]
+```
+
+
+
+# EDY status calculation
+
+## Creating an ExpressionSet object from the Data
+
+```{r, message=FALSE}
+library(Biobase)
+```
+
+Clinical data is stored as an AnnotatedDataFrame object, this would be the "phenotypic data" in the ExpressionSet object. In this case we need to 
+
+```{r}
+pData <- AnnotatedDataFrame(LoY_overlap)
+rownames(pData) <- LoY_overlap$submitter_id
+```
+
+Transforming the data frame of counts into a matrix so it's readable for the ExpressionSet() function:
+
+```{r}
+library(org.Hs.eg.db)
+```
+
+```{r}
+Counts_male$symbol <- mapIds(org.Hs.eg.db,
+                     keys=rownames(Counts_male),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+
+```{r}
+Counts_symbol <- aggregate(. ~ symbol, data = Counts_male, max)
+row.names(Counts_symbol) <- Counts_symbol$symbol
+```
+
+```{r}
+Counts_symbol <- Counts_symbol[,c(-1)]
+```
+
+```{r}
+exprs <- as.matrix(Counts_symbol)
+```
+
+Checking all the samples are the same in phenotypic and count data:
+
+
+```{r}
+all(rownames(pData) == colnames(exprs))
+```
+
+In the featureData part of the ExpressionSet object we store the **Gene Symbols** which correspond to the rownames of the counts dataframe:
+
+```{r}
+featureData <- as.data.frame(row.names(Counts_symbol))
+rownames(featureData) <- row.names(Counts_symbol)
+colnames(featureData) <- c("Symbol")
+```
+
+With all this information we create the Expression Set object:
+
+```{r}
+exampleSet <- ExpressionSet(assayData=exprs, phenoData=pData, featureData = AnnotatedDataFrame(featureData))
+```
+
+## Calculation of EDY
+
+
+```{r}
+#Add column with the hgnc symbol information to fData
+fData(exampleSet)$id.feature <- featureNames(exampleSet)
+```
+        
+```{r}
+annot.expr <- fData(exampleSet)
+```
+
+```{r}
+gene.expr <- exprs(exampleSet)[rownames(exprs(exampleSet))%in%annot.expr$id.feature,]
+      #Replace gene ID for hgnc symbol
+      rownames(gene.expr) <- annot.expr[, "Symbol"]
+      #Select those genes that belong to chrY
+      exprY <- gene.expr[annot.expr[, "Symbol"]%in%EDY::chrY.genes$hgnc_symbol,]
+      exprY <- exprY[complete.cases(exprY),]
+      #Select those genes that belong to the rest of the genome
+      exprRef <- gene.expr[annot.expr[, "Symbol"]%in%EDY::autosomal.genes$hgnc_symbol,]
+      exprRef <- exprRef[complete.cases(exprRef),]
+```
+
+
+```{r}
+#Convert expression sets into numeric since they came out as character
+exprY <- as.data.frame(apply( exprY, 2, as.numeric))
+exprRef <- as.data.frame(apply(exprRef, 2, as.numeric))
+```
+
+```{r}
+#Apply EDY formulae: 
+Ry <- sweep(log2(exprY+1), 2, FUN="-", 
+                apply(log2(exprRef+1), 2, mean))
+EDYcontinuous <- apply(Ry, 2, mean)
+```
+
+```{r}
+# Establish the control group, in this case males known for having no LoY
+controls <- EDYcontinuous[pData(exampleSet)[,"LoY"]=="No"]
+```
+
+```{r}
+controls <- EDYcontinuous
+```
+
+
+```{r}
+# Establish from the cutoff value cases with EDY
+thresh <- median(controls, na.rm=TRUE) - 1.2*IQR(controls, na.rm=TRUE)
+  EDY <- cut(EDYcontinuous, c(-Inf, thresh, Inf), 
+             labels = c("Yes", "No"))
+  EDY <- relevel(EDY, 2)
+```
+
+```{r}
+# Build the output
+pData(exampleSet)$EDY <- EDY
+    names(EDY) <- names(EDYcontinuous)
+    ans <- list(EDY=EDY, EDYcontinuous=EDYcontinuous, 
+                threshold=thresh)
+```
+
+```{r}
+EDY <- ans$EDY
+```
+
+```{r}
+EDYLoY <- cbind(LoY_overlap, EDY)
+```
+
+```{r}
+table(EDYLoY$EDY)
+```
+
+```{r}
+table(EDYLoY$LoY)
+```
+
+```{r}
+table(EDYLoY$LoY, EDYLoY$EDY)
+```
+
+```{r}
+#write.csv(EDYLoY, "Cell_EDYLoY.cvs")
+```
+
+Creating a dataset from the list obtained in the result:
+
+```{r}
+ans1 <- do.call(rbind.data.frame, ans)
+```
+
+```{r}
+colnames(ans1) <- colnames(Counts_symbol)
+rownames(ans1) <- c("EDY", "EDYcontinuous", "Threshold")
+```
+
+```{r}
+ans1 <- rbind(ans1, LoY_overlap$LoY)
+```
+
+
+# Y chromosome signature expression
+
+We now check for the expression of our Y chromosome signature overlapping with the computed status of EDY and LoY
+
+First we stablish the signature:
+
+```{r}
+Y_sig <- c("DDX3Y",	"EIF1AY",	"KDM5D",	"NLGN4Y",	"RPS4Y1",	"SRY",	"TBL1Y",	"TMSB4Y","USP9Y",	"UTY",	"ZFY")
+```
+
+Select the genes for the count table and prepare the count table to be read by the pheatmap() function:
+
+```{r}
+i <- which(rownames(Counts_symbol) %in%  Y_sig)
+counts_Y <- Counts_symbol[i,]
+```
+
+```{r}
+names <- rownames(counts_Y)
+counts_Y <- as.data.frame(apply( counts_Y, 2, as.numeric))
+rownames(counts_Y) <- names
+```
+
+```{r}
+names <- gsub("-", ".", LoY$submitter_id)
+LoY$submitter_id <- names
+```
+
+
+```{r}
+ library(pheatmap)
+  choose_matrix=counts_Y
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))  
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(LoY = EDYLoY$LoY, EDY = EDYLoY$EDY)
+  rownames(annotation_col)=colnames(counts_Y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = T
+           #,filename = 'CellLine_LOY_EDY_Signature_HN_SCC.png'
+           )
+  
+```
+
+Select the genes for the count table and prepare the count table to be read by the pheatmap() function:
+
+```{r}
+i <- which(rownames(Counts_symbol) %in%  EDY::chrY.genes$hgnc_symbol)
+counts_Y_total <- Counts_symbol[i,]
+```
+
+```{r}
+names <- rownames(counts_Y_total)
+counts_Y_total <- as.data.frame(apply( counts_Y_total, 2, as.numeric))
+rownames(counts_Y_total) <- names
+```
+
+```{r}
+nrow(counts_Y_total)
+keep <- rowSums(counts_Y_total)  > 0
+counts_Y_total <- as.data.frame(counts_Y_total[keep,])
+nrow(counts_Y_total)
+```
+
+
+```{r}
+ library(pheatmap)
+  choose_matrix=counts_Y_total
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))  
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(LoY = EDYLoY$LoY, EDY = EDYLoY$EDY)
+  rownames(annotation_col)=colnames(counts_Y_total)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = T
+           #,filename = 'CellLine_LOY_EDY_Signature_HN_SCC.png'
+           )
+  
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=counts_Y_total
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))  
+  ## http://www.bio-info-trainee.com/1980.html
+  clustering <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(LoY = EDYLoY$LoY, EDY = EDYLoY$EDY)
+  rownames(annotation_col)=colnames(counts_Y_total)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = T, cluster_cols = clustering, cutree_cols = 3 
+           #,filename = 'CellLine_LOY_EDY_Signature_HN_SCC.png'
+           )
+  
+```
+
+
+```{r}
+ library(pheatmap)
+  choose_matrix=counts_Y
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  clustering <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(LoY = EDYLoY$LoY, EDY = EDYLoY$EDY)
+  rownames(annotation_col)=colnames(counts_Y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = T, , cluster_cols = clustering, cutree_cols = 2 
+           #,filename = 'CellLine_LOY_EDY_Signature_HN_SCC.png'
+           )
+  
+```
+
+We introduce the data in the Patient Metadata table:
+```{r}
+t1 <- cutree(clustering, 2)
+```
+
+```{r}
+EDYLoY$Y_expres <- factor(t1, levels = c(1,2), labels = c("Low", "High"))
+```
+
+We check by size we have named the groups correctly
+
+```{r}
+table(EDYLoY$Y_expres)
+```
+
+```{r}
+View(data.frame(EDYLoY$submitter_id, EDYLoY$Y_expres))
+```
+
+We plot the survival curve based on the groups:
+TCGA_Masterfile_male <- transform(TCGA_Masterfile_male, OS_5y_months = as.numeric(OS_5y_months))
+library(survival)
+library(survminer)
+surv_object0 <- Surv(time = TCGA_Masterfile_male$OS_5y_months, event = as.double(TCGA_Masterfile_male$OS_5y_event))
+fit00 <- survfit(surv_object0 ~ Y_expres, data = TCGA_Masterfile_male)
+ggsurvplot(fit00, data = TCGA_Masterfile_male, pval = TRUE, title = "OS 5 year event")
+```{r}
+
+```
