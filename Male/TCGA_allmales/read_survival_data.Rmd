@@ -1,0 +1,21 @@
+---
+title: "Untitled"
+author: "Cristina Conde Lopez"
+date: "3/22/2022"
+output: html_document
+---
+
+```{r}
+hj <- list()
+for (proj in name_proj) {
+  file <- paste0( proj, "-survival", ".txt")
+  TCGA_BLCA <- read_table(file)
+  hj[[paste0(proj)]] <- TCGA_BLCA
+}
+```
+
+```{r}
+list.save(hj, 'TCGA_allpatients_curatedsurvival.rdata')
+```
+
+
