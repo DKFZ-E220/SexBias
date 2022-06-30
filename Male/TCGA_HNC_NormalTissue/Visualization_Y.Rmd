@@ -1,0 +1,127 @@
+---
+title: "Untitled"
+author: "Cristina Conde Lopez"
+date: "5/31/2022"
+output: html_document
+---
+
+```{r}
+TCGA_PT_TPM <- read.table( "/Volumes/LaCie/Gender_Analysis/Male/DEG_Analysis/TCGA_TPM_symbol.txt", sep = "\t")
+```
+
+```{r}
+rownames(HNSC_NT_Clinical_data) <- HNSC_NT_Clinical_data[,1]
+```
+
+```{r}
+patient <- gsub("-",".",clinical_data$patient)
+```
+
+```{r}
+i <- which(TCGA_Metadata_Male_Ychr$Patient_ID %in% patient)
+```
+
+```{r}
+PT_metadata <- TCGA_Metadata_Male_Ychr[i,]
+```
+
+```{r}
+i <- which(patient %in% TCGA_Metadata_Male_Ychr$Patient_ID)
+```
+
+```{r}
+NT_metadata <- clinical_data[i,]
+```
+
+```{r}
+sampleNT <- paste0(gsub("-",".",NT_metadata$patient), ".NT")
+```
+
+```{r}
+samplePT <- paste0(PT_metadata$Patient_ID, ".PT")
+```
+
+```{r}
+clinical <- data.frame(sample = c(sampleNT, samplePT), patient = c(gsub("-",".",NT_metadata$patient), PT_metadata$Patient_ID), sample_type = c(rep("NT",29), rep("PT",29)), LoY = c(rep("No",29), PT_metadata$LoY))
+```
+
+```{r}
+clinical <- clinical[order(clinical$patient),]
+```
+
+```{r}
+TCGA_NT <- TCGA_NT_symbol[,c(gsub("-",".",NT_metadata$patient))]
+```
+
+```{r}
+colnames(TCGA_NT) <- paste0(gsub("-",".",colnames(TCGA_NT)), ".NT")
+```
+
+```{r}
+TCGA_PT <- TCGA_PT_TPM[,PT_metadata$Patient_ID]
+```
+
+```{r}
+colnames(TCGA_PT) <- paste0(colnames(TCGA_PT), ".PT")
+```
+
+```{r}
+i <- which(rownames(TCGA_PT) %in% rownames(TCGA_NT))
+TCGA_PT_common <- TCGA_PT[i,]
+```
+
+```{r}
+i <- which(rownames(TCGA_NT) %in% rownames(TCGA_PT))
+TCGA_NT_common <- TCGA_NT[i,]
+```
+
+```{r}
+TPM_together <- cbind(TCGA_NT_common, TCGA_PT_common)
+```
+
+```{r}
+TPM_together <- TPM_together[,order(colnames(TPM_together))]
+```
+
+```{r}
+TPM_together[UTY,]
+```
+
+
+```{r}
+y_chr <- c("DDX3Y",	"EIF1AY",	"KDM5D",	"NLGN4Y",	"RPS4Y1",	"SRY",	"TBL1Y",	"TMSB4Y",	"USP9Y",	"UTY",	"ZFY")
+```
+
+```{r}
+TPM_Y_chr <- TPM_together[y_chr,]
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TPM_Y_chr[-10,]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  #clustering2 <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Patient = clinical$patient, Type = clinical$sample_type, LoY = factor(clinical$LoY))
+  annoCol<-list(LoY=c(Yes="lightblue", No="orange"))
+  rownames(annotation_col)=colnames(TPM_Y_chr)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, annotation_colors = annoCol,
+           #cluster_cols = clustering2, cutree_cols = 3, 
+           filename = 'NT_PT_YCHR_expression.png',
+           cluster_cols = F)
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TPM_Y_chr[-10,]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  #clustering2 <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Patient = clinical$patient, Type = clinical$sample_type, LoY = factor(clinical$LoY))
+  annoCol<-list(LoY=c(Yes="lightblue", No="orange"))
+  rownames(annotation_col)=colnames(TPM_Y_chr)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, annotation_colors = annoCol,
+           #cluster_cols = clustering2, cutree_cols = 3,
+           filename = 'NT_PT_YCHR_expression_cluster.png',
+           cluster_cols = T)
+```
