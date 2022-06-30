@@ -1,0 +1,245 @@
+---
+title: "EDY Analysis TCGA-HNSC"
+subtitle: "Obtatining EDY status for Male Patients"
+author: "Cristina Conde López"
+date: "`r Sys.Date()`"
+output: 
+ prettydoc::html_pretty:
+    toc: true
+    theme: hpstr
+    highlight: github
+    number_sections: true
+ pdf_document:
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+bibliography: citations.bibtex
+nocite: '@*'
+---
+
+# Obtaining the Data 
+
+## Raw Counts with Symbols ID
+
+Downloaded from the GDC using TCGABiolinks on the 2nd of December 2022:
+
+```{r}
+Sim_counts <- read.table("HNSC_COUNTS.txt")
+```
+
+Preparing the Patients ID so it matches other datasets:
+
+```{r}
+colnames(Sim_counts) <- substr(Sim_counts[1,], 1, 12)
+Sim_counts <- Sim_counts[-1,]
+```
+
+```{r}
+Sim_counts <- Sim_counts[,order(colnames(Sim_counts))] 
+```
+
+```{r, warning=FALSE}
+rownames(Sim_counts) <- Sim_counts$Tags
+Sim_counts <- Sim_counts[order(rownames(Sim_counts)),]
+Sim_counts <- Sim_counts[,-1]
+```
+
+```{r}
+colnames(Sim_counts) <- gsub("-", ".", colnames(Sim_counts))
+```
+
+## Patient Metadata
+
+This data was obtained on the 7th of October downloaded directly from the GDC portal: 
+
+```{r, warning=FALSE}
+library(readxl)
+TCGA_Masterfile <- read_excel("TCGA_MASTERFILE_clinical_data.xls")
+TCGA_Masterfile$Patient_ID <- gsub("-", ".", TCGA_Masterfile$Patient_ID)
+row.names(TCGA_Masterfile) <- TCGA_Masterfile$Patient_ID
+```
+
+## LoY Status
+
+```{r}
+male<- read.table("TCGA_Metadata_Male_Ychr.txt", sep = "\t")
+colnames(male) <- male[1,]
+male <- male[-1,]
+```
+
+```{r}
+LoY <- as.data.frame(male$LoY)
+rownames(LoY) <- male$Patient_ID
+```
+
+Introducing LoY Status into the Metadata dataset:
+
+```{r}
+TCGA_Masterfile[87] <- c(NA)
+```
+
+```{r}
+colnames(TCGA_Masterfile)[87] <- "LoY"
+```
+
+```{r}
+i <- which(TCGA_Masterfile$Patient_ID %in% rownames(LoY))
+```
+
+```{r}
+TCGA_Masterfile$LoY[i] <- LoY$`male$LoY` 
+```
+
+# EDY status calculation
+
+## Creating an ExpressionSet object from the Data
+
+```{r, message=FALSE}
+library(Biobase)
+```
+
+Clinical data is stored as an AnnotatedDataFrame object, this would be the "phenotypic data" in the ExpressionSet object.
+
+```{r, warning=FALSE}
+row.names(TCGA_Masterfile) <- TCGA_Masterfile$Patient_ID
+```
+
+```{r}
+pData <- AnnotatedDataFrame(TCGA_Masterfile) 
+```
+
+Transforming the data frame of counts into a matrix so it's readable for the ExpressionSet() function:
+
+```{r}
+exprs <- as.matrix(Sim_counts)
+```
+
+Checking all the samples are the same in phenotypic and count data:
+
+```{r}
+all(rownames(pData) == colnames(exprs))
+```
+
+In the featureData part of the ExpressionSet object we store the **Gene Symbols** which correspond to the rownames of the counts dataframe:
+
+```{r}
+featureData <- as.data.frame(row.names(Sim_counts))
+rownames(featureData) <- row.names(Sim_counts)
+colnames(featureData) <- c("Symbol")
+```
+
+With all this information we create the Expression Set object:
+
+```{r}
+exampleSet <- ExpressionSet(assayData=exprs, phenoData=pData, featureData = AnnotatedDataFrame(featureData))
+```
+
+## Calculation of EDY
+
+```{r}
+#Filter males in the expression set
+ii <- which(varLabels(exampleSet)=="Gender")
+        exampleSet <- exampleSet[,pData(exampleSet)[,ii]=="Male"]
+        exampleSet <- exampleSet[,!is.na(pData(exampleSet)[,ii])]
+```
+
+```{r}
+#Add column with the hgnc symbol information to fData
+fData(exampleSet)$id.feature <- featureNames(exampleSet)
+```
+        
+```{r}
+annot.expr <- fData(exampleSet)
+```
+
+```{r}
+gene.expr <- exprs(exampleSet)[rownames(exprs(exampleSet))%in%annot.expr$id.feature,]
+      #Replace gene ID for hgnc symbol
+      rownames(gene.expr) <- annot.expr[, "Symbol"]
+      #Select those genes that belong to chrY
+      exprY <- gene.expr[annot.expr[, "Symbol"]%in%EDY::chrY.genes$hgnc_symbol,]
+      exprY <- exprY[complete.cases(exprY),]
+      #Select those genes that belong to the rest of the genome
+      exprRef <- gene.expr[annot.expr[, "Symbol"]%in%EDY::autosomal.genes$hgnc_symbol,]
+      exprRef <- exprRef[complete.cases(exprRef),]
+```
+
+
+```{r}
+#Convert expression sets into numeric since they came out as character
+exprY <- as.data.frame(apply( exprY, 2, as.numeric))
+exprRef <- as.data.frame(apply(exprRef, 2, as.numeric))
+```
+
+```{r}
+#Apply EDY formulae: 
+Ry <- sweep(log2(exprY+1), 2, FUN="-", 
+                apply(log2(exprRef+1), 2, mean))
+EDYcontinuous <- apply(Ry, 2, mean)
+```
+
+```{r}
+# Establish the control group, in this case males known for having no LoY
+controls <- EDYcontinuous[pData(exampleSet)[,"LoY"]=="No"]
+```
+
+```{r}
+# Establish from the cutoff value cases with EDY
+thresh <- median(controls, na.rm=TRUE) - 1.2*IQR(controls, na.rm=TRUE)
+  EDY <- cut(EDYcontinuous, c(-Inf, thresh, Inf), 
+             labels = c("Yes", "No"))
+  EDY <- relevel(EDY, 2)
+```
+
+```{r}
+# Build the output
+pData(exampleSet)$EDY <- EDY
+    names(EDY) <- names(EDYcontinuous)
+    ans <- list(EDY=EDY, EDYcontinuous=EDYcontinuous, 
+                threshold=thresh)
+```
+
+```{r}
+table(ans$EDY)
+```
+
+Creating a dataset from the list obtained in the result:
+
+```{r}
+ans1 <- do.call(rbind.data.frame, ans)
+```
+
+```{r}
+colnames(ans1) <- male$Patient_ID
+rownames(ans1) <- c("EDY", "EDYcontinuous", "Threshold")
+```
+
+# Saving the data
+
+```{r}
+write.table(ans1, "/Users/cristinacondel/Desktop/Gender_COX2/Male_HNSC_EDYinformation.txt", sep = "\t", row.names = F, quote = F)
+```
+
+```{r}
+TCGA_Masterfile[88] <- c(NA)
+```
+
+```{r}
+colnames(TCGA_Masterfile)[88] <- "EDY"
+```
+
+```{r}
+i <- which(TCGA_Masterfile$Patient_ID %in% names(ans$EDY))
+```
+
+```{r}
+TCGA_Masterfile$EDY[i] <- factor(ans$EDY, levels = c("No","Yes"), labels = c(1, 2))
+```
+
+```{r}
+table(TCGA_Masterfile[TCGA_Masterfile$Gender == "Male",]$LoY, TCGA_Masterfile[TCGA_Masterfile$Gender == "Male",]$EDY)
+```
+
+# Bibliography
+
