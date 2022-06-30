@@ -517,6 +517,10 @@ saveRDS(seurat.integrated, "/omics/odcf/analysis/OE0509_projects/hnscc/single_ce
 ```
 
 ```{r}
+saveRDS(seurat.integrated, "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/seurat_integrated_cells.rds")
+```
+
+```{r}
 anchors <- FindIntegrationAnchors(object.list = obj.list, normalization.method = "SCT", anchor.features = features)
 ```
 
