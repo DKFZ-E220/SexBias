@@ -1,0 +1,263 @@
+---
+  title: "CNV Analysis CPTAC-HNSC"
+subtitle: "Obtatining Copy Number Index"
+author: "Cristina Conde López"
+date: "`r Sys.Date()`"
+output: 
+  prettydoc::html_pretty:
+  toc: true
+theme: hpstr
+highlight: github
+number_sections: true
+pdf_document:
+  toc: true
+toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+bibliography: citations.bibtex
+nocite: '@*'
+---
+  
+# Obtain the Data with TCGABiolinks
+  
+## CNV data
+  
+This data was downloaded on the 2nd of March 2022 from the LinkedOmics portal: http://linkedomics.org/data_download/CPTAC-HNSCC/.
+
+```{r}
+Segment_CPTAC <- read.csv("/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC/HS_CPTAC_HNSCC_SCNA_log2_segment_level.cvs", sep = "\t")
+```
+
+## Patient Metadata
+
+This data was obtained on the 2nd of March from the GDC portal using TCGABiolinks function GDCquery_clinic:
+
+```{r eval=FALSE}
+clinical <- GDCquery_clinic(project = "CPTAC-3", type = "clinical")
+clinical_SSC <- clinical[clinical$primary_diagnosis == "Squamous cell carcinoma, NOS",]
+i <- which(clinical_SSC$tissue_or_organ_of_origin != "Lower lobe, lung")
+clinical_SSC <- clinical_SSC[i,]
+i <- which(clinical_SSC$tissue_or_organ_of_origin != "Lung, NOS")
+clinical_SSC <- clinical_SSC[i,]
+i <- which(clinical_SSC$tissue_or_organ_of_origin != "Middle lobe, lung")
+clinical_SSC <- clinical_SSC[i,]
+i <- which(clinical_SSC$tissue_or_organ_of_origin != "Upper lobe, lung")
+clinical_SSC <- clinical_SSC[i,]
+## Here you insert the pathway and filename you desire :)
+write.csv(as.data.frame(clinical_SSC), 
+          file="/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC/CPTAC_clinical_HNSSC.csv")
+i <- which(clinical_SSC$gender == "male")
+clinical_SSC_male <- clinical_SSC[i,]
+## Here you insert the pathway and filename you desire :)
+write.csv(as.data.frame(clinical_SSC_male), 
+          file="/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC/CPTAC_clinical_HNSSC_male.csv")
+```
+  
+```{r}
+Segment_CPTAC <- read.csv("/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC/CPTAC_clinical_HNSSC_male.csv", sep = "\t")
+```
+
+## Biospecimen data: Percentage Tumor Nuclei
+
+This data was not found for this particular project.
+
+# Processing of the data:
+
+## Obtaining CNI
+
+```{r}
+HNSC_SegmentFiles <-Segment_CPTAC
+```
+
+Create Sizes for the segments: Chromosome End - Chromosome Star:
+
+```{r}
+HNSC_SegmentFiles$size <- HNSC_SegmentFiles$end - HNSC_SegmentFiles$start
+```
+
+Look for patients that have more than one sample and cleaning it up:
+
+```{r}
+patients <- split(HNSC_SegmentFiles, f = HNSC_SegmentFiles$sample )
+```
+
+```{r}
+duplicated(patients)
+```
+
+### In male patients
+
+Selecting the male patients:
+
+```{r}
+SegmentFiles_Male <- HNSC_SegmentFiles[HNSC_SegmentFiles$sample %in% clinical_SSC_male$submitter_id,]
+```
+
+Unlogging the segment_mean variable to obtain Copy Number:
+
+```{r}
+SegmentFiles_Male$Unlog_Segment <- 2^(1+SegmentFiles_Male$log2)
+```
+
+Weighting the segment_mean by the sizes of the segments:
+
+```{r}
+SegmentFiles_Male$Weighted_value <- SegmentFiles_Male$Unlog_Segment*SegmentFiles_Male$size
+```
+
+Separating the patients in a list in order for the loop to work:
+
+```{r}
+patients_male <- split(SegmentFiles_Male, f = SegmentFiles_Male$sample )
+```
+
+Loop that calculates the average Copy Number Index per Chromosome inside each patient:
+
+```{r}
+ID <- names(patients_male)
+a <- c(1:22, "X", "Y")
+a <- paste0("chr", a)
+x <- list()
+for (h in (1:length(patients_male))) {
+  vec <- c()
+  for (i in a) {
+    mean <- sum(patients_male[[h]]$Weighted_value[patients_male[[h]]$chromosome %in% i])/sum(patients_male[[h]]$size[patients_male[[h]]$chromosome %in% i])
+    vec <- c(vec,mean)
+  }
+  names(vec) <- c(1:22, "X", "Y")
+  x[[paste0(ID[h])]] <- vec
+}
+
+```
+
+Unlisting the result to obtain a data frame with the CNI for each Chromosome for each patient:
+
+```{r}
+chrom_male <- do.call(rbind.data.frame, x)
+chrom_male <- as.data.frame(apply( chrom_male, 2, as.numeric))
+colnames(chrom_male) <- a
+rownames(chrom_male) <- ID
+```
+
+Plotting the CNI for all the Male patients:
+
+```{r}
+den <- density((chrom_male$chrY))
+plot(den, xlim = c(0,2))
+```
+
+```{r}
+den <- density((chrom_male$chrY/2))
+plot(den, xlim = c(0,2))
+```
+
+Saving the data:
+
+```{r}
+write.csv(chrom_male, "/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC/Male_CopyNumberIndex.csv")
+```
+
+Calculating the maximum points of the graph:
+
+```{r}
+which.max(den$y)
+den$x[288]
+```
+
+```{r}
+which.max(den$y[den$x < 1.917638])
+den$x[72]
+```
+
+```{r}
+den <- density(chrom_male$chrX)
+plot(den)
+```
+
+```{r}
+LoY <- chrom_male[chrom_male$chrY < 1,]
+```
+
+```{r}
+i <- which(clinical_SSC_male$submitter_id %in% rownames(LoY))
+i
+```
+
+```{r}
+LoY <- c(1:length(clinical_SSC_male$submitter_id))
+LoY[i] <- c("Yes")
+LoY[-i] <- c("No")
+```
+
+```{r}
+clinical_SSC_male$LoY <- LoY
+```
+
+```{r}
+table(clinical_SSC_male$LoY)
+```
+
+```{r}
+write.csv(clinical_SSC_male, "/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC/CPTAC_clinical_HNSSC_male_LoY.csv")
+```
+
+### Doing the same process for the female patients:
+
+```{r}
+Female_ID <- TCGA_Masterfile[TCGA_Masterfile$Gender == "Female",]
+```
+
+```{r}
+SegmentFiles_Female <- HNSC_SegmentFiles[HNSC_SegmentFiles$Sample %in% Female_ID$Patient_ID,]
+```
+
+```{r}
+SegmentFiles_Female$Unlog_Segment <- 2^(1+SegmentFiles_Female$Segment_Mean)
+```
+
+```{r}
+SegmentFiles_Female$Weighted_value <- SegmentFiles_Female$Unlog_Segment*SegmentFiles_Female$Size
+```
+
+```{r}
+patients_Female <- split(SegmentFiles_Female, f = SegmentFiles_Female$Sample )
+```
+
+```{r}
+ID <- names(patients_Female)
+a <- c(1:22, "X", "Y")
+x <- list()
+for (h in (1:length(patients_Female))) {
+  vec <- c()
+  for (i in a) {
+    mean <- sum(patients_Female[[h]]$Weighted_value[patients_Female[[h]]$Chromosome %in% i])/sum(patients_Female[[h]]$Size[patients_Female[[h]]$Chromosome %in% i])
+    vec <- c(vec,mean)
+  }
+  names(vec) <- c(1:22, "X", "Y")
+  x[[paste0(ID[h])]] <- vec
+}
+
+```
+
+```{r}
+chrom_Female <- do.call(rbind.data.frame, x)
+```
+
+```{r}
+colnames(chrom_Female) <- a
+rownames(chrom_Female) <- ID
+```
+
+```{r}
+write.table(chrom_Female, "/Users/cristinacondel/Desktop/Gender_COX2/Female_CopyNumberIndex.txt", sep = "\t", row.names = T, quote = T)
+```
+
+```{r}
+den <- density(chrom_Female$Y)
+plot(den)
+```
+
+```{r}
+den <- density(chrom_Female$X)
+plot(den)
+```
