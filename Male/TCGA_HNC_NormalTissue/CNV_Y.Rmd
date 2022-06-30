@@ -1,0 +1,225 @@
+---
+title: "CNV Analysis TCGA-HNSC"
+subtitle: "Obtatining Copy Number Index"
+author: "Cristina Conde López"
+date: "`r Sys.Date()`"
+output: 
+ prettydoc::html_pretty:
+    toc: true
+    theme: hpstr
+    highlight: github
+    number_sections: true
+ pdf_document:
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+bibliography: citations.bibtex
+nocite: '@*'
+---
+
+# Obtain the Data with TCGABiolinks
+
+## CNV data
+
+This data was downloaded on the 31st of January 2022 from the GDC portal using R tool TCGABiolinks.
+
+Loading of package TCGAbiolink (download raw data)
+
+```{r, results= FALSE, message=FALSE, warning=FALSE}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("TCGAbiolinks")
+```
+
+```{r, results= FALSE, message=FALSE, warning=FALSE}
+library (TCGAbiolinks)
+```
+
+
+Specification of data search, we store the specifications in query 
+Possible specifications (look in the GDC portal): GDCquery(
+  project,
+  data.category,
+  data.type,
+  workflow.type,
+  legacy = FALSE,
+  access,
+  platform,
+  file.type,
+  barcode,
+  data.format,
+  experimental.strategy,
+  sample.type
+)
+
+In this case selecting head and neck cancer, transcriptome profiling data --> gene expression quatification, data type in counts.
+
+```{r, results= FALSE, message=FALSE}
+query <- GDCquery(project = 'TCGA-HNSC',
+data.category = "Copy Number Variation",
+data.type = "Copy Number Segment",
+platform = "Affymetrix SNP 6.0")
+```
+
+Obtaining sample names from the query file (column cases)
+
+```{r}
+samplesDown <- getResults (query, cols = c('cases'))
+```
+
+Selecting the samples that come from "Primary Solid Tumor" (typesample = "TP") among all the samples selected.
+
+```{r}
+dataSmTP <- TCGAquery_SampleTypes (barcode = samplesDown, typesample = 'NT')
+```
+
+
+Searching in the database for the selected NT samples:
+
+```{r, message=FALSE, results=FALSE}
+queryDown <- GDCquery(project = 'TCGA-HNSC',
+data.category = "Copy Number Variation",
+data.type = "Copy Number Segment",
+platform = "Affymetrix SNP 6.0",
+barcode = c(dataSmTP))
+```
+
+Once the search is defined then we obtain the data with GSCdownload, it downloads itself into a new directory in the working directory called GDC data, it can be changed in the function:
+
+```{r, message=FALSE}
+GDCdownload(queryDown)
+```
+
+GDCprepare converts the data downloaded into an R file
+
+```{r, message=FALSE}
+HNSC_SegmentFiles <- GDCprepare(queryDown, save = TRUE, save.filename =
+"TCGA_HNSC_SegmentFiles.rda")
+```
+
+## Patient Metadata
+
+This data was obtained on the 7th of October downloaded directly from the GDC portal: 
+
+```{r}
+clinical_data <- as.data.frame(SummarizedExperiment::colData(HNSC_SegmentFiles))
+```
+
+```{r}
+write.csv(clinical_data, file = 'HNSC_NT_Clinical_data.csv')
+```
+
+```{r}
+male_ID <- clinical_data[ clinical_data$gender == "male",]
+```
+
+# Processing of the data:
+
+## Obtaining CNI
+
+Create Sizes for the segments: Chromosome End - Chromosome Star:
+
+```{r}
+HNSC_SegmentFiles$Size <- HNSC_SegmentFiles$End - HNSC_SegmentFiles$Start
+```
+
+Look for patients that have more than one sample and cleaning it up:
+
+```{r}
+patients <- split(HNSC_SegmentFiles, f = HNSC_SegmentFiles$Sample )
+```
+
+Giving patients the same ID as other datasets:
+
+```{r}
+name <- names(patients)
+```
+
+```{r}
+name <- substring(name, 1, 12)
+```
+
+
+```{r}
+duplicated(name) 
+```
+
+Taking out duplicated data:
+
+Renaming the patients with an ID matching the metadata:
+
+```{r}
+HNSC_SegmentFiles$Sample <- substring(HNSC_SegmentFiles$Sample, 1, 12)
+```
+
+### In male patients
+
+Selecting the male patients:
+
+```{r}
+i <- which(HNSC_SegmentFiles$Sample %in% male_ID$patient)
+```
+
+
+```{r}
+SegmentFiles_Male <- HNSC_SegmentFiles[i,]
+```
+
+Unlogging the segment_mean variable to obtain Copy Number:
+
+```{r}
+SegmentFiles_Male$Unlog_Segment <- 2^(1+SegmentFiles_Male$Segment_Mean)
+```
+
+Weighting the segment_mean by the sizes of the segments:
+
+```{r}
+SegmentFiles_Male$Weighted_value <- SegmentFiles_Male$Unlog_Segment*SegmentFiles_Male$Size
+```
+
+Separating the patients in a list in order for the loop to work:
+
+```{r}
+patients_male <- split(SegmentFiles_Male, f = SegmentFiles_Male$Sample )
+```
+
+Loop that calculates the average Copy Number Index per Chromosome inside each patient:
+
+```{r}
+ID <- names(patients_male)
+a <- c(1:22, "X", "Y")
+x <- list()
+for (h in (1:length(patients_male))) {
+  vec <- c()
+  for (i in a) {
+    mean <- sum(patients_male[[h]]$Weighted_value[patients_male[[h]]$Chromosome %in% i])/sum(patients_male[[h]]$Size[patients_male[[h]]$Chromosome %in% i])
+    vec <- c(vec,mean)
+  }
+  names(vec) <- c(1:22, "X", "Y")
+  x[[paste0(ID[h])]] <- vec
+}
+
+```
+
+Unlisting the result to obtain a data frame with the CNI for each Chromosome for each patient:
+
+```{r}
+chrom_male <- do.call(rbind.data.frame, x)
+colnames(chrom_male) <- a
+rownames(chrom_male) <- ID
+```
+
+Plotting the CNI for all the Male patients:
+
+```{r}
+den <- density(chrom_male$Y)
+png(file= "plotY_TCGA_HNSC_NT.png", width=600, height=350)
+plot(den, xlim = c(0,2))
+dev.off()
+```
+
+
+
+
