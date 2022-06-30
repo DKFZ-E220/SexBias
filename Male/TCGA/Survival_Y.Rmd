@@ -1,0 +1,38 @@
+---
+title: "Untitled"
+author: "Cristina Conde Lopez"
+date: "3/29/2022"
+output: html_document
+---
+
+We upload the male patient metadata with the information of LoY and EDY previously obtained.
+
+```{r}
+TCGA_Masterfile_male <- read.table("TCGA_Metadata_Male_Ychr.txt", sep = "\t")
+colnames(TCGA_Masterfile_male) <- TCGA_Masterfile_male[1,]
+TCGA_Masterfile_male <- TCGA_Masterfile_male[-1,]
+rownames(TCGA_Masterfile_male) <- TCGA_Masterfile_male$Patient_ID
+```
+
+```{r}
+TCGA_Masterfile_male_HPV <- TCGA_Masterfile_male[TCGA_Masterfile_male$HPV == "Negative",]
+```
+
+```{r}
+TCGA_Masterfile_male_HPV <- transform(TCGA_Masterfile_male_HPV, OS_5y_months = as.numeric(OS_5y_months))
+```
+
+```{r, message=FALSE}
+library(survival)
+library(survminer)
+surv_object0 <- Surv(time = TCGA_Masterfile_male_HPV$OS_5y_months, event = as.double(TCGA_Masterfile_male_HPV$OS_5y_event))
+```
+
+```{r}
+fit00 <- survfit(surv_object0 ~ Y_expression, data = TCGA_Masterfile_male_HPV)
+```
+
+```{r}
+ggsurvplot(fit00, data = TCGA_Masterfile_male_HPV, pval = TRUE, title = "OS 5 year event")
+```
+
