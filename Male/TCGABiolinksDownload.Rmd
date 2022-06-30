@@ -1,0 +1,132 @@
+---
+title: "Extracting data with TCGABiolinks"
+output: html_document
+---
+
+Loading of package TCGAbiolink (download raw data)
+
+```{r}
+BiocManager::install("BioinformaticsFMRP/TCGAbiolinksGUI.data")
+BiocManager::install("BioinformaticsFMRP/TCGAbiolinks")
+```
+
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("TCGAbiolinks")
+```
+
+```{r}
+library (TCGAbiolinks)
+```
+
+
+Specification of data search, we store the specifications in query 
+Possible specifications (look in the GDC portal): GDCquery(
+  project,
+  data.category,
+  data.type,
+  workflow.type,
+  legacy = FALSE,
+  access,
+  platform,
+  file.type,
+  barcode,
+  data.format,
+  experimental.strategy,
+  sample.type
+)
+
+In this case selecting head and neck cancer, transcriptome profiling data --> gene expression quatification, data type in counts.
+
+```{r}
+query <- GDCquery(project = 'TCGA-HNSC',
+data.category = "Transcriptome Profiling",
+data.type = "Gene Expression Quantification",
+workflow.type = "STAR - Counts")
+```
+
+Obtaining sample names from the query file (column cases)
+
+```{r}
+samplesDown <- getResults (query, cols = c('cases'))
+```
+
+Selecting the samples that come from "Primary Solid Tumor" (typesample = "TP") among all the samples selected.
+
+```{r}
+dataSmTP <- TCGAquery_SampleTypes (barcode = samplesDown, typesample = 'NT')
+```
+
+
+Searching in the database for the selected NT samples:
+
+```{r}
+queryDown <- GDCquery(project = 'TCGA-HNSC',
+data.category = "Transcriptome Profiling",
+data.type = "Gene Expression Quantification",
+workflow.type = "STAR - Counts",
+barcode = c(dataSmTP))
+```
+
+Once the search is defined then we obtain the data with GSCdownload, it downloads itself into a new directory in the working directory called GDC data, it can be changed in the function:
+
+```{r}
+GDCdownload(queryDown)
+```
+
+GDCprepare converts the data downloaded into an R file
+
+```{r}
+HNSC_STAR <- GDCprepare(queryDown, save = TRUE, save.filename =
+"TCGA_HNSC_STAR.rda")
+```
+
+Extracting the counts (under assay) using SummarizedExperiment from the HNSC_HTseqSE object
+
+```{r}
+Counts <- as.data.frame(SummarizedExperiment::assay(HNSC_STAR ))
+```
+
+```{r}
+clinical_data <- as.data.frame(SummarizedExperiment::colData(HNSC_STAR))
+```
+
+```{r}
+write.csv(clinical_data, file = 'HNSC_NT_Clinical_data.csv')
+```
+
+
+
+Writing the table into the working directory:
+
+```{r}
+write.csv(Counts, file = 'HNSC_NT_Counts.csv')
+```
+
+Renaming the columns so they have matching names
+
+```{r}
+colnames <- substr(colnames(Counts), 1, 12)
+colnames <- gsub("-", ".", colnames)
+colnames(Counts) <- colnames
+head(Counts)
+```
+
+Ordering the count table in the same alphanumeric way as the sample information table
+
+```{r}
+Counts <- Counts[ , order(names(Counts))]
+```
+
+Writing table in csv format into the working directory so its easier to get it in further uses
+
+```{r}
+## Here you insert the pathway and filename you desire :)
+
+write.csv(as.data.frame(rna), 
+          file="/Users/cristinacondel/Desktop/IntentoAnalisis/Gender+PTGS2/TCGA_counts.csv")
+```
+
