@@ -1,0 +1,609 @@
+---
+title: "GSEA_Y_chromosome"
+author: "Cristina Conde Lopez"
+date: "2/7/2022"
+output: html_document
+---
+
+## Perform GSVA on the TPM data
+
+```{r}
+library(GSVA)
+library(GSEABase)
+library(GSVAdata)
+```
+
+```{r}
+GeneSetCollection <- getGmt("genesignature_Y_chromosome.gmt")
+```
+
+
+
+
+
+```{r}
+colnames(TCGA_Masterfile_male) <- TCGA_Masterfile_male[1,]
+```
+
+```{r}
+TCGA_Masterfile_male <- TCGA_Masterfile_male[-1,]
+```
+
+```{r}
+GeneSetCollection <- getGmt("genesignature_Y_chromosome.gmt")
+```
+
+
+```{r}
+TPM_sym <- read.table("TCGA_TPM_symbol.txt")
+```
+
+```{r, warning=FALSE}
+library(readxl)
+TCGA_Masterfile <- read_excel("TCGA_MASTERFILE_clinical_data.xls")
+TCGA_Masterfile$Patient_ID <- gsub("-", ".", TCGA_Masterfile$Patient_ID)
+row.names(TCGA_Masterfile) <- TCGA_Masterfile$Patient_ID
+```
+
+```{r}
+TPM_male <- TPM_sym[,TCGA_Masterfile_male$Patient_ID]
+```
+
+```{r}
+TPM_male_mat <- as.matrix(TPM_male)
+```
+
+
+```{r}
+GSVA_TPM1 <- gsva((as.matrix(TPM_sym)), GeneSetCollection, method = "gsva", annotation = "org.Hs.eg.db", min.sz=5, max.sz=500, parallel.sz = 4, kcdf="Gaussian")
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=GSVA_TPM1
+  #clustering2 <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender)
+  rownames(annotation_col)=colnames(GSVA_TPM1)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, 
+           #cluster_cols = clustering2, cutree_cols = 3, 
+           cluster_rows = F)
+```
+
+```{r}
+TCGA_Masterfile$GSVA_score <- GSVA_TPM1[1,]
+```
+
+```{r}
+TCGA_female <- TCGA_Masterfile[TCGA_Masterfile$Gender == "Female",]
+```
+
+```{r}
+max(TCGA_female$GSVA_score)
+```
+
+```{r}
+TCGA_male <- TCGA_Masterfile[TCGA_Masterfile$Gender == "Male",]
+```
+
+```{r}
+x1<-rep(c(0),times=nrow(TCGA_male))
+```
+
+```{r}
+for (i in c(1:367)){
+  if(TCGA_male$GSVA_score[i] < -0.04645608){
+    x1[i] <- c("Yes")
+    } else {
+      x1[i] <- c("No")
+    }
+}
+```
+
+```{r}
+x1 
+```
+
+```{r}
+fem <-rep(c("female"),times=nrow(TCGA_Masterfile))
+```
+
+```{r}
+i <- which(TCGA_Masterfile$Patient_ID %in% TCGA_male$Patient_ID)
+```
+
+```{r}
+fem[i] <- x1
+```
+
+```{r}
+TCGA_Masterfile$EDY <- fem
+```
+
+```{r}
+write.csv(TCGA_Masterfile, file = "/Volumes/LaCie/Gender_Analysis/Male/DEG_Analysis/Gender_COX2/TCGA_Masterfile_EDY_LOY.cvs")
+```
+
+```{r}
+TCGA_LOY_EDY <- read.csv("TCGA_Masterfile_EDY_LOY.cvs")
+```
+
+```{r}
+table(TCGA_LOY_EDY$EDY, TCGA_LOY_EDY$LoY)
+```
+
+```{r}
+CrossTable(TCGA_LOY_EDY$EDY, TCGA_LOY_EDY$LoY)
+```
+
+```{r}
+my_comparisons <- list( c("Female", "Male"))
+```
+
+```{r}
+library(ggplot2)
+```
+
+```{r}
+ggplot(TCGA_Masterfile, aes(x=Gender, y=GSVA_score, fill=Gender)) +
+  xlab("Gender") +
+  ylab("GSVA score") +
+  geom_violin(trim=F) +
+  geom_boxplot(width=0.1) +
+  stat_compare_means(comparisons = my_comparisons
+                     , label.y = c(1.5)
+                     ) +
+  #stat_compare_means(label.y = 1.3) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"))
+```
+
+```{r}
+TCGA_Masterfile_male <- read.table("TCGA_Metadata_Male_Ychr.txt",sep = "\t")
+colnames(TCGA_Masterfile_male) <- TCGA_Masterfile_male[1,]
+TCGA_Masterfile_male <- TCGA_Masterfile_male[-1,]
+```
+
+```{r}
+fem1 <-rep(c("female"),times=nrow(TCGA_Masterfile))
+```
+
+```{r}
+i <- which(TCGA_Masterfile$Patient_ID %in% TCGA_Masterfile_male$Patient_ID)
+```
+
+```{r}
+fem1[i] <- TCGA_Masterfile_male$LoY
+```
+
+```{r}
+TCGA_Masterfile$LoY <- fem1
+```
+
+
+```{r}
+table(fem1)
+```
+
+```{r}
+TCGA_Masterfile$LoY <- x1
+```
+
+```{r}
+my_comparisons <- list( c("female", "Yes"), c("female", "No"), c(c("No", "Yes")))
+```
+
+```{r}
+ggplot(TCGA_Masterfile, aes(x=LoY, y=GSVA_score, fill=LoY)) +
+  xlab("LoY") +
+  ylab("GSVA score") +
+  geom_violin(trim=F) +
+  geom_boxplot(width=0.1) +
+  stat_compare_means(comparisons = my_comparisons
+                     , label.y = c(1.5, 1.3, 1.38)
+                     ) +
+  #stat_compare_means(label.y = 1.3) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"))
+```
+
+
+```{r}
+t1 <- cutree(clustering2, 3)
+```
+
+```{r}
+TCGA_Masterfile_male$Y_GSVA <- factor(t1, levels = c(1,2,3), labels = c("Vey_Low", "Low", "High"))
+```
+
+```{r}
+table(TCGA_Masterfile_male$Y_GSVA)
+```
+
+```{r}
+Male <- transform(TCGA_Masterfile_male, OS_5y_months = as.numeric(OS_5y_months))
+```
+
+```{r}
+surv_object0 <- Surv(time = Male$OS_5y_months, event = as.double(Male$OS_5y_event))
+```
+
+```{r}
+h <- survfit(surv_object0 ~ Y_GSVA, data = Male)
+```
+
+```{r}
+ggsurvplot(h, data = Male, pval = TRUE, title = "OS 5 year event")
+```
+
+```{r}
+GeneSetCollectionC2 <- getGmt("/Users/cristinacondel/Desktop/Gender_COX2/c2.all.v7.5.1.symbols.gmt")
+```
+
+```{r}
+GSVA_TPM <- gsva((as.matrix(TPM_male)), GeneSetCollectionC2, method = "gsva", annotation = "org.Hs.eg.db", min.sz=5, max.sz=500, parallel.sz = 4, kcdf="Gaussian")
+```
+```{r}
+GSVA_TPM2 <- rbind(GSVA_TPM, GSVA_TPM1)
+```
+
+
+```{r}
+write.table(GSVA_TPM2, "/Users/cristinacondel/Desktop/Gender_COX2/C2pathways_TCGA_HSNC_male.txt", sep = "\t", row.names = T, quote = T)
+```
+
+```{r}
+GSVA_TPM6 <- read.table("/Users/cristinacondel/Desktop/Gender_COX2/C2pathways_TCGA_HSNC_male.txt", sep = "\t")
+```
+
+```{r}
+library(edgeR)
+```
+
+
+```{r}
+design <- model.matrix(~0+factor(TCGA_Masterfile_male$Y_expression))
+  colnames(design)=levels(factor(TCGA_Masterfile_male$Y_expression))
+  rownames(design)=colnames(GSVA_TPM2)
+```
+
+```{r}
+contrast.matrix <- makeContrasts(
+    HL = High - Low,
+    HVL = High - Very_Low,
+    LVL = Low - Very_Low,
+    levels = design
+    )
+```
+
+
+```{r}
+fit <- lmFit(GSVA_TPM2, design)
+fit.cont <- contrasts.fit(fit, contrast.matrix)
+fit <- eBayes(fit.cont)
+res <- decideTests(fit, p.value=0.01)
+summary(res)
+```
+
+```{r}
+tt <- topTable(fit, coef=1, n=Inf)
+DEpwys <- rownames(tt)[tt$adj.P.Val <= 0.01]
+plot(tt$logFC, -log10(tt$P.Value), pch=".", cex=4, col=grey(0.75),
+     main="", xlab="GSVA enrichment score difference", ylab=expression(-log[10]~~Raw~P-value))
+abline(h=-log10(max(tt$P.Value[tt$adj.P.Val <= 0.01])), col=grey(0.5), lwd=1, lty=2)
+points(tt$logFC[match(DEpwys, rownames(tt))],
+       -log10(tt$P.Value[match(DEpwys, rownames(tt))]), pch=".", cex=5, col="darkred")
+text(max(tt$logFC)*0.85, -log10(max(tt$P.Value[tt$adj.P.Val <= 0.01])), "1% FDR", pos=3)
+```
+
+```{r}
+summary(res)
+```
+
+```{r}
+resul.frame <- as.data.frame(res)
+```
+
+```{r}
+#High Vs. Low
+
+HL <- as.data.frame(resul.frame$HL)
+names <- rownames(resul.frame)
+HL <- cbind(HL, names)
+colnames(HL) <- c("HL", "pathway")
+HL_UP <- as.data.frame(HL[HL$HL == 1,])
+HL_DOWN <- as.data.frame(HL[HL$HL == -1,])
+```
+
+```{r}
+HVL <- as.data.frame(resul.frame$HVL)
+names <- rownames(resul.frame)
+HVL <- cbind(HVL, names)
+colnames(HVL) <- c("HVL", "pathway")
+HVL_UP <- as.data.frame(HVL[HVL$HVL == 1,])
+HVL_DOWN <- as.data.frame(HVL[HVL$HVL == -1,])
+```
+
+```{r}
+Contrast_High_UP <- list(HL_UP$pathway, HVL_UP$pathway)
+```
+
+```{r}
+library(VennDiagram)
+```
+
+```{r}
+venn.diagram(
+  x = Contrast_High_UP,
+  category.names = c("HiLo_UP" , "HiVLo_UP"),
+  filename = '#HIGH_venn_diagramm.png',
+  output=TRUE, 
+  imagetype="png" ,
+          height = 480 , 
+          width = 480 , 
+          resolution = 300,
+          compression = "lzw",
+          lwd = 1,
+          col=c("#440154ff", '#21908dff'),
+          fill = c(alpha("#440154ff",0.3), alpha('#21908dff',0.3)),
+          cex = 0.5,
+          fontfamily = "sans",
+          cat.cex = 0.3,
+          cat.default.pos = "outer",
+          cat.fontfamily = "sans",
+          cat.pos = c(0, -2),
+          cat.dist = c(0.055, 0.055),
+          cat.col = c("#440154ff", '#21908dff')
+)
+```
+
+```{r}
+ol = calculate.overlap(x = Contrast_High_UP)
+```
+
+```{r}
+overlaping_pathways <- ol$a3
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=GSVA_TPM2[overlaping_pathways,]
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Y_expression = TCGA_Masterfile_male$Y_expression, LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY)
+  rownames(annotation_col)=colnames(GSVA_TPM2)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = F)
+  
+```
+
+```{r}
+TCGA_Masterfile_male_HiLo <- TCGA_Masterfile_male[TCGA_Masterfile_male$Y_expression != "Very_Low",]
+```
+
+```{r}
+GSVA_TPM_Hilo <- GSVA_TPM2[,TCGA_Masterfile_male_HiLo$Patient_ID]
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=GSVA_TPM_Hilo[overlaping_pathways,]
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Y_expression = TCGA_Masterfile_male_HiLo$Y_expression, LoY = TCGA_Masterfile_male_HiLo$LoY, EDY = TCGA_Masterfile_male_HiLo$EDY)
+  rownames(annotation_col)=colnames(GSVA_TPM_Hilo)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = F)
+  
+```
+
+```{r}
+TCGA_Masterfile_male_HiVLo <- TCGA_Masterfile_male[TCGA_Masterfile_male$Y_expression != "Low",]
+```
+
+```{r}
+GSVA_TPM_HiVlo <- GSVA_TPM2[,TCGA_Masterfile_male_HiVLo$Patient_ID]
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=GSVA_TPM_HiVlo[overlaping_pathways,]
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Y_expression = TCGA_Masterfile_male_HiVLo$Y_expression, LoY = TCGA_Masterfile_male_HiVLo$LoY, EDY = TCGA_Masterfile_male_HiVLo$EDY)
+  rownames(annotation_col)=colnames(GSVA_TPM_HiVlo)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = F)
+  
+```
+
+```{r}
+Contrast_High_DOWN <- list(HL_DOWN$pathway, HVL_DOWN$pathway)
+```
+
+```{r}
+library(VennDiagram)
+```
+
+```{r}
+venn.diagram(
+  x = Contrast_High_DOWN,
+  category.names = c("HiLo_DOWN" , "HiVLo_DOWN"),
+  filename = '#HIGH_DOWN_venn_diagramm.png',
+  output=TRUE, 
+  imagetype="png" ,
+          height = 480 , 
+          width = 480 , 
+          resolution = 300,
+          compression = "lzw",
+          lwd = 1,
+          col=c("#440154ff", '#21908dff'),
+          fill = c(alpha("#440154ff",0.3), alpha('#21908dff',0.3)),
+          cex = 0.5,
+          fontfamily = "sans",
+          cat.cex = 0.3,
+          cat.default.pos = "outer",
+          cat.fontfamily = "sans",
+          cat.pos = c(0, -2),
+          cat.dist = c(0.055, 0.055),
+          cat.col = c("#440154ff", '#21908dff')
+)
+```
+
+```{r}
+ol = calculate.overlap(x = Contrast_High_DOWN)
+```
+
+```{r}
+overlaping_pathways <- ol$a3
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=GSVA_TPM2[overlaping_pathways,]
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Y_expression = TCGA_Masterfile_male$Y_expression, LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY)
+  rownames(annotation_col)=colnames(GSVA_TPM2)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = F)
+  
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=GSVA_TPM_Hilo[overlaping_pathways,]
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Y_expression = TCGA_Masterfile_male_HiLo$Y_expression, LoY = TCGA_Masterfile_male_HiLo$LoY, EDY = TCGA_Masterfile_male_HiLo$EDY)
+  rownames(annotation_col)=colnames(GSVA_TPM_Hilo)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = F)
+  
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=GSVA_TPM_HiVlo[overlaping_pathways,]
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Y_expression = TCGA_Masterfile_male_HiVLo$Y_expression, LoY = TCGA_Masterfile_male_HiVLo$LoY, EDY = TCGA_Masterfile_male_HiVLo$EDY)
+  rownames(annotation_col)=colnames(GSVA_TPM_HiVlo)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = F)
+  
+```
+
+```{r}
+LVL <- as.data.frame(resul.frame$LVL)
+names <- rownames(resul.frame)
+LVL <- cbind(LVL, names)
+colnames(LVL) <- c("LVL", "pathway")
+LVL_UP <- as.data.frame(LVL[LVL$LVL == 1,])
+LVL_DOWN <- as.data.frame(LVL[LVL$LVL == -1,])
+```
+
+```{r}
+tempOutput = topTable(fit, coef=1, n=Inf)
+  DEG_limma_voom = na.omit(tempOutput)
+  head(DEG_limma_voom)
+  nrDEG=DEG_limma_voom[,c(1,4)]
+  colnames(nrDEG)=c('log2FoldChange','pvalue') 
+```
+
+
+
+```{r}
+draw_h_v(GSVA_TPM2[,TCGA_Masterfile_male_HiLo$Patient_ID],nrDEG,'HiVSLo_limma',TCGA_Masterfile_male_HiLo$Y_expression,0.00000001)
+```
+
+
+
+```{r}
+draw_h_v <- function(exprSet,need_DEG,n='DEseq2',group_list,logFC_cutoff){
+  ## we only need two columns of DEG, which are log2FoldChange and pvalue
+  ## heatmap
+  
+  library(pheatmap)
+  choose_gene=head(rownames(need_DEG),50) ## 50 maybe better
+  choose_matrix=exprSet[choose_gene,]
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame( group_list=group_list  )
+  rownames(annotation_col)=colnames(exprSet)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col,
+           filename = paste0(n,'_need_DEG_top50_heatmap.png'))
+  
+  
+  library(ggfortify)
+  df=as.data.frame(t(choose_matrix))
+  df$group=group_list
+  png(paste0(n,'_DEG_top50_pca.png'),res=120)
+  p=autoplot(prcomp( df[,1:(ncol(df)-1)] ), data=df,colour = 'group')+theme_bw()
+  print(p)
+  dev.off()
+  
+  
+  if(! logFC_cutoff){
+    logFC_cutoff <- with(need_DEG,mean(abs( log2FoldChange)) + 2*sd(abs( log2FoldChange)) )
+    
+  }
+  # logFC_cutoff=1
+  
+  need_DEG$change = as.factor(ifelse(need_DEG$pvalue < 0.01 & abs(need_DEG$log2FoldChange) > logFC_cutoff,
+                                     ifelse(need_DEG$log2FoldChange > logFC_cutoff ,'UP','DOWN'),'NOT')
+  )
+  this_tile <- paste0('Cutoff for logFC is ',round(logFC_cutoff,3),
+                      '\nThe number of up pathways is ',nrow(need_DEG[need_DEG$change =='UP',]) ,
+                      '\nThe number of down pathways is ',nrow(need_DEG[need_DEG$change =='DOWN',])
+  )
+  library(ggplot2)
+  g = ggplot(data=need_DEG, 
+             aes(x=log2FoldChange, y=-log10(pvalue), 
+                 color=change)) +
+    geom_point(alpha=0.4, size=1.75) +
+    theme_set(theme_set(theme_bw(base_size=20)))+
+    xlab("log2 fold change") + ylab("-log10 p-value") +
+    ggtitle( this_tile ) + theme(plot.title = element_text(size=15,hjust = 0.5))+
+    scale_colour_manual(values = c('blue','black','red')) ## corresponding to the levels(res$change)
+  print(g)
+  ggsave(g,filename = paste0(n,'_volcano.png'))
+  dev.off()
+}
+```
+
+```{r}
+res <- igsva()
+```
+
+```{r}
+immune_sig <- read.csv("HNC_immune_signatures.cvs")
+```
+
+```{r}
+rownames(immune_sig) <- immune_sig$X
+```
+
+```{r}
+immune_sig <- immune_sig[,-1]
+```
+
+```{r}
+immune_sig_male <- immune_sig[,TCGA_Masterfile_male$Patient_ID]
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=immune_sig_male
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Y_expression = TCGA_Masterfile_male$Y_expression, LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY)
+  rownames(annotation_col)=colnames(immune_sig_male)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = F)
+  
+```
+
+
+

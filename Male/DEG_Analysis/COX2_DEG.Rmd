@@ -1,0 +1,1273 @@
+---
+title: "Untitled"
+author: "Cristina Conde Lopez"
+date: "12/2/2021"
+output: html_document
+---
+
+
+
+```{r}
+Counts <- read.csv("TCGA_counts.csv")
+```
+
+```{r}
+rownames(Counts) <- Counts$X
+```
+
+```{r}
+Counts <- Counts[,c(-1)]
+```
+
+
+```{r}
+library(readxl)
+TCGA_Masterfile <- read_excel("TCGA_MASTERFILE_clinical_data.xls")
+TCGA_Masterfile$Patient_ID <- gsub("-", ".", TCGA_Masterfile$Patient_ID)
+row.names(TCGA_Masterfile) <- TCGA_Masterfile$Patient_ID
+```
+
+```{r}
+library(DESeq2)
+Counts = round(Counts)
+(colData <- data.frame(row.names=colnames(Counts), 
+                         Gender=TCGA_Masterfile$Gender) )
+dds <- DESeqDataSetFromMatrix(countData = Counts,
+                                colData = colData,
+                                design = ~ Gender)
+```
+
+```{r}
+dds <- DESeq(dds)
+```
+
+```{r}
+res <- results(dds, 
+                 contrast=c("Gender","Male","Female"))
+  resOrdered <- res[order(res$padj),]
+  head(resOrdered)
+  DEG =as.data.frame(resOrdered)
+  DESeq2_DEG = na.omit(DEG)
+```
+
+```{r}
+nrDEG=DESeq2_DEG[,c(2,6)]
+colnames(nrDEG)=c('log2FoldChange','pvalue')  
+```
+
+https://github.com/jmzeng1314/tcga_example/blob/master/functions.R
+
+```{r}
+draw_h_v(Counts,nrDEG,'DEseq2',TCGA_Masterfile$Gender,1)
+```
+
+```{r}
+library(edgeR)
+```
+
+```{r}
+d <- DGEList(counts=Counts,group=factor(TCGA_Masterfile$Gender))
+  keep <- rowSums(cpm(d)>1) >= 2
+  table(keep)
+  d <- d[keep, , keep.lib.sizes=FALSE]
+  d$samples$lib.size <- colSums(d$counts)
+  d <- calcNormFactors(d)
+  d$samples
+  dge=d
+  design <- model.matrix(~0+factor(TCGA_Masterfile$Gender))
+  rownames(design)<-colnames(dge)
+  colnames(design)<-levels(factor(TCGA_Masterfile$Gender))
+  dge=d
+  dge <- estimateGLMCommonDisp(dge,design)
+  dge <- estimateGLMTrendedDisp(dge, design)
+  dge <- estimateGLMTagwiseDisp(dge, design)
+```
+
+```{r}
+fit <- glmFit(dge, design)
+my.contrast <- makeContrasts(
+    Male_vs_Female=Male-Female,
+    levels=design)
+  # https://www.biostars.org/p/110861/
+  lrt <- glmLRT(fit,  contrast=my.contrast) 
+  nrDEG=topTags(lrt, n=nrow(dge))
+  nrDEG=as.data.frame(nrDEG)
+  head(nrDEG)
+  edgeR_DEG =nrDEG 
+  nrDEG=edgeR_DEG[,c(1,5)]
+  colnames(nrDEG)=c('log2FoldChange','pvalue') 
+```
+
+```{r}
+draw_h_v(Counts,nrDEG,'edgeR',TCGA_Masterfile$Gender,1)
+```
+
+```{r}
+design <- model.matrix(~0+factor(TCGA_Masterfile$Gender))
+  colnames(design)=levels(factor(TCGA_Masterfile$Gender))
+  rownames(design)=colnames(Counts)
+```
+
+```{r}
+dge <- DGEList(counts=Counts)
+  dge <- calcNormFactors(dge)
+  logCPM <- cpm(dge, log=TRUE, prior.count=3)
+```
+
+```{r}
+v <- voom(dge,design,plot=TRUE, normalize="quantile")
+  fit <- lmFit(v, design)
+```
+
+```{r}
+  cont.matrix=makeContrasts(contrasts=c('Male-Female'),levels = design)
+  fit2=contrasts.fit(fit,cont.matrix)
+  fit2=eBayes(fit2)
+```
+
+```{r}
+tempOutput = topTable(fit2, coef='Male-Female', n=Inf)
+  DEG_limma_voom = na.omit(tempOutput)
+  head(DEG_limma_voom)
+  nrDEG=DEG_limma_voom[,c(1,4)]
+  colnames(nrDEG)=c('log2FoldChange','pvalue') 
+```
+
+```{r}
+draw_h_v(Counts,nrDEG,'limma',TCGA_Masterfile$Gender,1)
+```
+
+```{r}
+nrDEG1=DEG_limma_voom[,c(1,4)]
+colnames(nrDEG1)=c('log2FoldChange','pvalue') 
+```
+
+```{r}
+nrDEG2=edgeR_DEG[,c(1,5)]
+colnames(nrDEG2)=c('log2FoldChange','pvalue') 
+```
+
+```{r}
+nrDEG3=DESeq2_DEG[,c(2,6)]
+colnames(nrDEG3)=c('log2FoldChange','pvalue') 
+```
+
+
+```{r}
+mi=unique(c(rownames(nrDEG1),rownames(nrDEG1),rownames(nrDEG1)))
+lf=data.frame(lf1=nrDEG1[mi,1],
+              lf2=nrDEG2[mi,1],
+              lf3=nrDEG3[mi,1])
+```
+
+```{r}
+limma_sig <- nrDEG1[nrDEG1[,2] <= 0.05 & nrDEG1[,1] >= 1,]
+edgeR_sig <- nrDEG2[nrDEG2[,2] <= 0.05 & nrDEG2[,1] >= 1,]
+DESeq_sig <- nrDEG3[nrDEG3[,2] <= 0.05 & nrDEG3[,1] >= 1,]
+```
+
+```{r}
+library(VennDiagram)
+```
+
+```{r}
+genes <- list(rownames(limma_sig), rownames(edgeR_sig), rownames(DESeq_sig))
+```
+
+```{r}
+venn.diagram(
+  x = genes,
+  category.names = c("Limma" , "EdgeR" , "DESeq"),
+  filename = '#14_venn_diagramm.png',
+  output=TRUE, 
+  imagetype="png" ,
+          height = 480 , 
+          width = 480 , 
+          resolution = 300,
+          compression = "lzw",
+          lwd = 1,
+          col=c("#440154ff", '#21908dff', '#fde725ff'),
+          fill = c(alpha("#440154ff",0.3), alpha('#21908dff',0.3), alpha('#fde725ff',0.3)),
+          cex = 0.5,
+          fontfamily = "sans",
+          cat.cex = 0.3,
+          cat.default.pos = "outer",
+          cat.pos = c(-27, 27, 135),
+          cat.dist = c(0.055, 0.055, 0.085),
+          cat.fontfamily = "sans",
+          cat.col = c("#440154ff", '#21908dff', '#fde725ff'),
+          rotation = 1
+)
+```
+
+```{r}
+ol = calculate.overlap(x = genes)
+names(ol) <- c("a123", "a12", "a13", "a23", "a1", "a2", "a3")
+```
+
+```{r}
+overlaping_genes <- ol$a123
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=Counts[overlaping_genes,]
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender, COX2_exp = TCGA_Masterfile_e$COX2_exp )
+  rownames(annotation_col)=colnames(Counts)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col,
+           filename = 'Overlaping_genes_expression.png')
+  
+```
+
+https://cran.r-project.org/web/packages/biomartr/vignettes/Functional_Annotation.html
+
+```{r}
+library(biomaRt)
+
+human = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+listAttributes(human)
+```
+
+
+```{r}
+res_human <- getBM(attributes = c("ensembl_gene_id", "external_gene_name", "description","chromosome_name", "gene_biotype" ), filters    = "ensembl_gene_id", values = overlaping_genes, mart = human)
+```
+
+
+```{r}
+library(org.Hs.eg.db)
+```
+
+
+```{r}
+anno_sig_gene <- mapIds(org.Hs.eg.db,
+                     keys= overlaping_genes,
+                     column=c("SYMBOL"),
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+
+```{r}
+anno_sig_gene <- as.data.frame(na.omit(anno_sig_gene))
+```
+
+```{r}
+Counts_symbol <- Counts[rownames(anno_sig_gene),]
+rownames(Counts_symbol) <- anno_sig_gene$`na.omit(anno_sig_gene)`
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=Counts_symbol
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender )
+  rownames(annotation_col)=colnames(Counts_symbol)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col,
+           filename = 'Overlaping_genes_expression_genename.png')
+  
+```
+
+```{r}
+res_human_y <- res_human[res_human$chromosome_name == "Y",]
+```
+
+```{r}
+Counts_y <- Counts[res_human_y$ensembl_gene_id,]
+```
+
+```{r}
+simbol_y <- mapIds(org.Hs.eg.db,
+                     keys= rownames(Counts_y),
+                     column=c("SYMBOL"),
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+
+```{r}
+simbol_y <- as.data.frame(na.omit(simbol_y))
+```
+
+```{r}
+Counts_y <- Counts[rownames(simbol_y),]
+```
+
+```{r}
+rownames(Counts_y) <- simbol_y$`na.omit(simbol_y)`
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=Counts_y
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender, Location = TCGA_Masterfile$Subsite, HPV = TCGA_Masterfile$HPV, OS = TCGA_Masterfile$OS_5y_event )
+  rownames(annotation_col)=colnames(Counts_y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, filename = 'Overlaping_genes_expression_Y.png')
+  
+```
+
+
+```{r}
+ library(pheatmap)
+  choose_matrix=Counts_y
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender, Location = TCGA_Masterfile$Subsite, HPV = TCGA_Masterfile$HPV, OS = TCGA_Masterfile$OS_5y_event, LoY = TCGA_Masterfile$LoY, EDY = TCGA_Masterfile$EDY)
+  rownames(annotation_col)=colnames(Counts_y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, filename = 'Overlaping_genes_expression_Y_EDY_LOY.png')
+  
+```
+
+```{r}
+TCGA_Masterfile_male <- TCGA_Masterfile[TCGA_Masterfile$Gender == "Male",]
+```
+
+```{r}
+Counts_male <- Counts_y[,TCGA_Masterfile_male$Patient_ID]
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=Counts_male
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile_male$Gender, OS = TCGA_Masterfile_male$OS_5y_event, LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY, Y_expression = TCGA_Masterfile_male$Y_expression)
+  rownames(annotation_col)=colnames(Counts_male)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, filename = 'Overlaping_genes_expression_male_Y_EDY_LOY.png')
+  
+```
+
+```{r}
+TPM_sym_difex <- TPM_sym[simbol_y$`na.omit(simbol_y)`,]
+TPM_sym_difex <- TPM_sym_difex[, TCGA_Masterfile_male$Patient_ID]
+```
+
+```{r}
+TPM_sym_difex["RPS4Y1",]
+```
+
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TPM_sym_difex
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  clustering2 <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile_male$Gender, OS = TCGA_Masterfile_male$OS_5y_event, LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY, Y_expression = TCGA_Masterfile_male$Y_expression)
+  rownames(annotation_col)=colnames(TPM_sym_difex)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, cluster_cols = clustering2, cutree_cols = 3, filename = 'Overlaping_genes_expression_male_YTPM.png')
+  
+```
+
+```{r}
+t1 <- cutree(clustering2, 3)
+```
+
+```{r}
+TCGA_Masterfile_male$Y_expression_OM <- factor(t1, levels = c(1,2,3), labels = c("Low", "Very_Low", "High"))
+```
+
+```{r}
+table(TCGA_Masterfile_male$Y_expression_OM)
+```
+
+```{r}
+surv_object0 <- Surv(time = TCGA_Masterfile_male$OS_5y_months, event = TCGA_Masterfile_male$OS_5y_event)
+```
+
+```{r}
+fit00 <- survfit(surv_object0 ~ Y_expression_OM, data = TCGA_Masterfile_male)
+```
+
+```{r}
+ggsurvplot(fit00, data = TCGA_Masterfile_male, pval = TRUE, title = "OS 5 year event")
+```
+
+
+
+```{r}
+Male_LoY_Low <- TCGA_Masterfile_male[TCGA_Masterfile_male$Y_expression_OM =="Low",]
+```
+```{r}
+Male_LoY_Low <- Male_LoY_Low[Male_LoY_Low$LoY =="Yes",]
+```
+```{r}
+Male_LoY_Low <- Male_LoY_Low$Patient_ID
+```
+
+
+
+```{r}
+surv_object <- Surv(time = TCGA_Masterfile_male$OS_days, event = TCGA_Masterfile_male$OS)
+```
+
+```{r}
+fit0 <- survfit(surv_object ~ LoY, data = TCGA_Masterfile_male)
+```
+
+```{r}
+ggsurvplot(fit0, data = TCGA_Masterfile_male, pval = TRUE, title = "OS")
+```
+
+```{r}
+surv_object0 <- Surv(time = TCGA_Masterfile_male$OS_5y_months, event = TCGA_Masterfile_male$OS_5y_event)
+```
+
+```{r}
+fit00 <- survfit(surv_object0 ~ LoY, data = TCGA_Masterfile_male)
+```
+
+```{r}
+ggsurvplot(fit00, data = TCGA_Masterfile_male, pval = TRUE, title = "OS 5 year event")
+```
+
+```{r}
+TCGA_Masterfile_male_NOHPV <- TCGA_Masterfile_male[TCGA_Masterfile_male$HPV == "Negative",]
+```
+
+```{r}
+surv_object0 <- Surv(time = TCGA_Masterfile_male_NOHPV$OS_5y_months, event = TCGA_Masterfile_male_NOHPV$OS_5y_event)
+```
+
+```{r}
+fit00 <- survfit(surv_object0 ~ LoY, data = TCGA_Masterfile_male_NOHPV)
+```
+
+```{r}
+ggsurvplot(fit00, data = TCGA_Masterfile_male_NOHPV, pval = TRUE, title = "OS 5 year event")
+```
+
+```{r}
+TCGA_Masterfile_male_NOHPV <- TCGA_Masterfile_male[TCGA_Masterfile_male$HPV == "Negative",]
+```
+
+```{r}
+surv_object0 <- Surv(time = TCGA_Masterfile_male_NOHPV$OS_5y_months, event = TCGA_Masterfile_male_NOHPV$OS_5y_event)
+```
+
+```{r}
+fit00 <- survfit(surv_object0 ~ LoY, data = TCGA_Masterfile_male_NOHPV)
+```
+
+```{r}
+ggsurvplot(fit00, data = TCGA_Masterfile_male_NOHPV, pval = TRUE, title = "OS 5 year event")
+```
+
+
+
+```{r}
+anno_sig_gene_Y <- mapIds(org.Hs.eg.db,
+                     keys= chrY_genes,
+                     column=c("ENSEMBL"),
+                     keytype="SYMBOL",
+                     multiVals="first")
+```
+
+
+```{r}
+anno_sig_gene_Y <- as.data.frame(na.omit(anno_sig_gene_Y))
+```
+
+```{r}
+Counts_symbol_Y <- Counts[anno_sig_gene_Y$`na.omit(anno_sig_gene_Y)`,]
+rownames(Counts_symbol_Y) <- rownames(anno_sig_gene_Y)
+```
+
+
+```{r}
+Counts_male_Y <- na.omit(Counts_symbol_Y[,TCGA_Masterfile_male$Patient_ID])
+```
+
+```{r}
+nrow(Counts_male_Y)
+keep <- rowSums(Counts_male_Y) > 0
+Counts_male_Y <- Counts_male_Y[keep,]
+nrow(Counts_male_Y)
+```
+
+```{r}
+TPM_coding_Y <- read.table("TCGA_TPM_SYMBOL_proteincoding.txt")
+```
+
+```{r}
+i <- which(rownames(TPM_coding_Y) %in% chrY_genes)
+```
+
+```{r}
+TPM_coding_Y <- TPM_coding_Y[i,]
+```
+
+```{r}
+TPM_coding_Y <- na.omit(TPM_coding_Y[,TCGA_Masterfile_male$Patient_ID])
+```
+
+```{r}
+nrow(TPM_coding_Y)
+keep <- rowSums(TPM_coding_Y) > 0
+TPM_coding_Y <- TPM_coding_Y[keep,]
+nrow(TPM_coding_Y)
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TPM_coding_Y
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile_male$Gender, OS = TCGA_Masterfile_male$OS_5y_event, LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY, Y_expression = TCGA_Masterfile_male$Y_expression)
+  rownames(annotation_col)=colnames(Counts_male_Y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, filename = 'Overlaping_genes_expression_male_allgenesY_EDY_LOY_TPM_coding.png')
+  
+```
+
+```{r}
+TPM_sym_Y <- TPM_sym[chrY_genes,]
+```
+
+```{r}
+TPM_sym_Y <- na.omit(TPM_sym_Y[,TCGA_Masterfile_male$Patient_ID])
+```
+
+```{r}
+nrow(TPM_sym_Y)
+keep <- rowSums(TPM_sym_Y) > 0
+TPM_sym_Y <- TPM_sym_Y[keep,]
+nrow(TPM_sym_Y)
+```
+
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TPM_sym_Y
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  annotation_col = data.frame(Gender = TCGA_Masterfile_male$Gender, OS = TCGA_Masterfile_male$OS_5y_event, LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY, Y_expression = TCGA_Masterfile_male$Y_expression)
+  rownames(annotation_col)=colnames(TPM_sym_Y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, filename = 'Overlaping_genes_expression_male_allgenesY_EDY_LOY_TPM.png')
+  
+```
+
+
+```{r}
+ library(pheatmap)
+  choose_matrix=Counts_male_Y
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile_male$Gender, OS = TCGA_Masterfile_male$OS_5y_event, LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY, Y_expression = TCGA_Masterfile_male$Y_expression)
+  rownames(annotation_col)=colnames(Counts_male_Y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, filename = 'Overlaping_genes_expression_male_allgenesY_EDY_LOY.png')
+  
+```
+
+
+```{r}
+TCGA_LOY <- TCGA_Masterfile_male[TCGA_Masterfile_male$LoY == "Yes",]
+```
+
+
+
+```{r}
+Counts_LoY <- Counts_y[,TCGA_LOY$Patient_ID]
+```
+
+
+```{r}
+ library(pheatmap)
+  choose_matrix=Counts_LoY
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_LOY$Gender, OS = TCGA_LOY$OS_5y_event, LoY = TCGA_LOY$LoY, EDY = TCGA_LOY$EDY, Y_expression = TCGA_LOY$Y_expression)
+  rownames(annotation_col)=colnames(Counts_LoY)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, filename = 'Overlaping_genes_expressionLOY_Y_EDY_LOY.png')
+  
+```
+
+
+
+```{r}
+choose_matrix=Counts_y
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+clustering1 <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+```
+
+
+```{r}
+ library(pheatmap)
+  
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender, Location = TCGA_Masterfile$Subsite, HPV = TCGA_Masterfile$HPV, OS = TCGA_Masterfile$OS_5y_event )
+  rownames(annotation_col)=colnames(Counts_y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, cluster_cols = clustering1, cutree_cols = 3, filename = 'Overlaping_genes_expression_Y_cluster.png')
+  
+```
+
+```{r}
+t <- cutree(clustering1, 3) 
+```
+
+```{r}
+TCGA_Masterfile$Y_expression <- factor(t, levels = c(1,2,3), labels = c("Low", "High", "Very_Low"))
+```
+
+```{r}
+table(TCGA_Masterfile$LoY, TCGA_Masterfile$Y_expression)
+```
+
+```{r}
+View(as.data.frame(cbind(TCGA_Masterfile$Gender, TCGA_Masterfile$Y_expression)))
+
+```
+
+```{r}
+table(TCGA_Masterfile$Y_expression)
+```
+
+```{r}
+surv_object <- Surv(time = TCGA_Masterfile$OS_days, event = TCGA_Masterfile$OS)
+```
+
+```{r}
+fit0 <- survfit(surv_object ~ Y_expression, data = TCGA_Masterfile)
+```
+
+```{r}
+ggsurvplot(fit0, data = TCGA_Masterfile, pval = TRUE, title = "OS")
+```
+
+```{r}
+surv_object0 <- Surv(time = TCGA_Masterfile$OS_5y_months, event = TCGA_Masterfile$OS_5y_event)
+```
+
+```{r}
+fit00 <- survfit(surv_object0 ~ Y_expression, data = TCGA_Masterfile)
+```
+
+```{r}
+ggsurvplot(fit00, data = TCGA_Masterfile, pval = TRUE, title = "OS 5 year event")
+```
+
+```{r}
+surv_object3 <- Surv(time = TCGA_Masterfile$DSS_5y_months, event = TCGA_Masterfile$DSS_5y_event)
+```
+
+```{r}
+fit3 <- survfit(surv_object3 ~ Y_expression, data = TCGA_Masterfile)
+```
+
+```{r}
+ggsurvplot(fit3, data = TCGA_Masterfile, pval = TRUE, title = "DSS 5 year event")
+```
+```{r}
+surv_object4 <- Surv(time = TCGA_Masterfile$PFI_5y_months, event = TCGA_Masterfile$PFI_5y_event)
+```
+
+```{r}
+fit4 <- survfit(surv_object4 ~ Y_expression, data = TCGA_Masterfile)
+```
+
+```{r}
+ggsurvplot(fit4, data = TCGA_Masterfile, pval = TRUE, title = "PFI 5 year event")
+```
+
+```{r}
+TCGA_Masterfile_NOHPV <- TCGA_Masterfile[TCGA_Masterfile$HPV == "Negative",]
+```
+
+```{r}
+surv_object <- Surv(time = TCGA_Masterfile_NOHPV$OS_days, event = TCGA_Masterfile_NOHPV$OS)
+```
+
+```{r}
+fit0 <- survfit(surv_object ~ Y_expression, data = TCGA_Masterfile_NOHPV)
+```
+
+```{r}
+ggsurvplot(fit0, data = TCGA_Masterfile_NOHPV, pval = TRUE, title = "OS")
+```
+
+```{r}
+surv_object0 <- Surv(time = TCGA_Masterfile_NOHPV$OS_5y_months, event = TCGA_Masterfile_NOHPV$OS_5y_event)
+```
+
+```{r}
+fit00 <- survfit(surv_object0 ~ Y_expression, data = TCGA_Masterfile_NOHPV)
+```
+
+```{r}
+ggsurvplot(fit00, data = TCGA_Masterfile_NOHPV, pval = TRUE, title = "OS 5 year event")
+```
+```{r}
+surv_object3 <- Surv(time = TCGA_Masterfile_NOHPV$DSS_5y_months, event = TCGA_Masterfile_NOHPV$DSS_5y_event)
+```
+
+```{r}
+fit3 <- survfit(surv_object3 ~ Y_expression, data = TCGA_Masterfile_NOHPV)
+```
+
+```{r}
+ggsurvplot(fit3, data = TCGA_Masterfile_NOHPV, pval = TRUE, title = "DSS 5 year event")
+```
+
+```{r}
+surv_object4 <- Surv(time = TCGA_Masterfile_NOHPV$PFI_5y_months, event = TCGA_Masterfile_NOHPV$PFI_5y_event)
+```
+
+```{r}
+fit4 <- survfit(surv_object4 ~ Y_expression, data = TCGA_Masterfile_NOHPV)
+```
+
+```{r}
+ggsurvplot(fit4, data = TCGA_Masterfile_NOHPV, pval = TRUE, title = "PFI 5 year event")
+```
+```{r}
+TCGA_Masterfile_male <- TCGA_Masterfile_e[TCGA_Masterfile_e$Gender == "Male",]
+```
+
+```{r}
+TCGA_Masterfile_male <- cbind(TCGA_Masterfile_male, ans$EDY)
+```
+
+```{r}
+TCGA_Masterfile_male <- TCGA_Masterfile_male[TCGA_Masterfile_male$EDY == "Yes",]
+```
+
+```{r}
+colnames(TCGA_Masterfile_male)[90] <- c("EDY")
+```
+
+```{r}
+table(TCGA_Masterfile_male$EDY, TCGA_Masterfile_male$Y_expression)
+```
+
+```{r}
+TCGA_Masterfile_male <- TCGA_Masterfile_male[TCGA_Masterfile_male$Y_expression != "Very_Low",]
+```
+
+```{r}
+surv_object0 <- Surv(time = TCGA_Masterfile_male$OS_5y_months, event = TCGA_Masterfile_male$OS_5y_event)
+```
+
+```{r}
+fit00 <- survfit(surv_object0 ~ HPV, data = TCGA_Masterfile_male)
+```
+
+```{r}
+ggsurvplot(fit00, data = TCGA_Masterfile_male, pval = TRUE, title = "OS 5 year event")
+```
+
+```{r}
+surv_object0 <- Surv(time = TCGA_Masterfile_male$OS_5y_months, event = TCGA_Masterfile_male$OS_5y_event)
+```
+
+```{r}
+fit00 <- survfit(surv_object0 ~ EDY, data = TCGA_Masterfile_male)
+```
+
+```{r}
+ggsurvplot(fit00, data = TCGA_Masterfile_male, pval = TRUE, title = "OS 5 year event")
+```
+
+```{r}
+names <- data.frame(EDY = names(EDY), TCGA = TCGA_Masterfile$Patient_ID)
+```
+
+```{r}
+TCGA_Masterfile <- cbind(TCGA_Masterfile, EDYRy)
+```
+
+```{r}
+TCGA_Masterfile <- cbind(TCGA_Masterfile, EDY_Status)
+```
+
+```{r}
+colnames(TCGA_Masterfile)[c(88,89)] <- c("Ry", "EDY_Status")
+```
+
+```{r}
+TCGA_Masterfile_male <- TCGA_Masterfile[TCGA_Masterfile$Gender == "Male",]
+```
+
+```{r}
+table(TCGA_Masterfile_male$Y_expression, TCGA_Masterfile_male$EDY_Status)
+```
+
+
+```{r}
+TCGA_Masterfile_male <- TCGA_Masterfile_male[TCGA_Masterfile_male$HPV == "Negative",]
+```
+
+```{r}
+TCGA_Masterfile_male <- TCGA_Masterfile_male[TCGA_Masterfile_male$Y_expression != "Very_Low",]
+```
+
+
+```{r}
+surv_object0 <- Surv(time = TCGA_Masterfile_male$OS_5y_months, event = TCGA_Masterfile_male$OS_5y_event)
+```
+
+```{r}
+fit00 <- survfit(surv_object0 ~ Y_expression, data = TCGA_Masterfile_male)
+```
+
+```{r}
+ggsurvplot(fit00, data = TCGA_Masterfile_male, pval = TRUE, title = "OS 5 year event")
+```
+
+
+```{r}
+limma_sig1 <- nrDEG1[nrDEG1[,2] <= 0.05 & nrDEG1[,1] <= -1,]
+edgeR_sig1 <- nrDEG2[nrDEG2[,2] <= 0.05 & nrDEG2[,1] <= -1,]
+DESeq_sig1 <- nrDEG3[nrDEG3[,2] <= 0.05 & nrDEG3[,1] <= -1,]
+```
+
+
+```{r}
+genes1 <- list(rownames(limma_sig1), rownames(edgeR_sig1), rownames(DESeq_sig1))
+```
+
+```{r}
+venn.diagram(
+  x = genes1,
+  category.names = c("Limma" , "EdgeR" , "DESeq"),
+  filename = '#14_venn_diagramm.png',
+  output=TRUE, 
+  imagetype="png" ,
+          height = 480 , 
+          width = 480 , 
+          resolution = 300,
+          compression = "lzw",
+          lwd = 1,
+          col=c("#440154ff", '#21908dff', '#fde725ff'),
+          fill = c(alpha("#440154ff",0.3), alpha('#21908dff',0.3), alpha('#fde725ff',0.3)),
+          cex = 0.5,
+          fontfamily = "sans",
+          cat.cex = 0.3,
+          cat.default.pos = "outer",
+          cat.pos = c(-27, 27, 135),
+          cat.dist = c(0.055, 0.055, 0.085),
+          cat.fontfamily = "sans",
+          cat.col = c("#440154ff", '#21908dff', '#fde725ff'),
+          rotation = 1
+)
+```
+
+```{r}
+ol1 = calculate.overlap(x = genes1)
+names(ol1) <- c("a123", "a12", "a13", "a23", "a1", "a2", "a3")
+```
+
+```{r}
+overlaping_genes1 <- ol1$a123
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=Counts[overlaping_genes1,]
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender, COX2_exp = TCGA_Masterfile_e$COX2_exp )
+  rownames(annotation_col)=colnames(Counts)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col,
+           filename = 'Overlaping_genes_expression_female.png')
+  
+```
+
+```{r}
+res_human1 <- getBM(attributes = c("ensembl_gene_id", "external_gene_name", "description","chromosome_name", "gene_biotype" ), filters    = "ensembl_gene_id", values = overlaping_genes1, mart = human)
+```
+
+```{r}
+simbol_1 <- mapIds(org.Hs.eg.db,
+                     keys= res_human1$ensembl_gene_id,
+                     column=c("SYMBOL"),
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+
+```{r}
+simbol_1 <- as.data.frame(na.omit(simbol_1))
+```
+
+```{r}
+Counts_1 <- Counts[rownames(simbol_1),]
+```
+
+```{r}
+rownames(Counts_1) <- simbol_1$`na.omit(simbol_1)`
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=Counts_1
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  clustering1 <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2") 
+  t <- cutree(clustering1, 3) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender, Location = TCGA_Masterfile$Subsite, HPV = TCGA_Masterfile$HPV, OS = TCGA_Masterfile$OS_5y_event )
+  rownames(annotation_col)=colnames(Counts_1)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, cluster_cols = clustering1, cutree_cols = 3,filename = 'Overlaping_genes_expression_X.png')
+  
+```
+
+```{r}
+Counts_DEG_together <- rbind(Counts_1, Counts_symbol)
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=Counts_DEG_together
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender, Location = TCGA_Masterfile$Subsite, HPV = TCGA_Masterfile$HPV, OS = TCGA_Masterfile$OS_5y_event )
+  rownames(annotation_col)=colnames(Counts_DEG_together)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, filename = 'Overlaping_genes_expression_together.png')
+  
+```
+
+```{r}
+TPM_protcod <- read.table("TCGA_TPM_ENSMBL_proteincoding.txt")
+```
+
+```{r}
+PGTS2_exp <- t(TPM_protcod["ENSG00000073756",])
+```
+
+```{r}
+PGTS2_exp <- PGTS2_exp[c(-501)]
+```
+
+
+```{r}
+quantile(as.numeric(PGTS2_exp))
+```
+
+```{r}
+PGTS2_exp <- as.data.frame(PGTS2_exp)
+```
+
+
+```{r}
+library(dplyr)
+ PGTS2_cluster <- PGTS2_exp %>% 
+mutate(group = case_when(as.numeric(PGTS2_exp) < 4.1368697  ~ "Low", 
+                         as.numeric(PGTS2_exp) > 42.2036000 ~ "High", 
+                         4.1368697  <= as.numeric(PGTS2_exp) &  as.numeric(PGTS2_exp) <= 42.2036000 ~ "Moderate"
+))
+```
+
+```{r}
+TCGA_Masterfile_e <- cbind(TCGA_Masterfile, PGTS2_cluster$group)
+```
+
+```{r}
+colnames(TCGA_Masterfile_e)[87] <- c("COX2_cluster")
+```
+
+```{r}
+TCGA_Masterfile_e <- cbind(TCGA_Masterfile_e, PGTS2_exp$PGTS2_exp)
+```
+
+```{r}
+colnames(TCGA_Masterfile_e)[88] <- c("COX2_exp")
+```
+
+```{r}
+my_comparisons = list(c("Male", "Female"))
+```
+
+```{r}
+TCGA_Masterfile_e$Gender <- as.factor(TCGA_Masterfile_e$Gender)
+```
+
+```{r}
+TCGA_Masterfile_e$COX2_exp <- as.numeric(TCGA_Masterfile_e$COX2_exp)
+```
+
+```{r}
+ggplot(TCGA_Masterfile_e, aes(x=Gender, y=COX2_exp, fill=Gender)) +
+  xlab("Gender") +
+  ylab("COX2 Expression") +
+  geom_boxplot()  +
+  stat_compare_means(comparisons = my_comparisons, label.y = c(600)) +
+  stat_compare_means(label.y = 900)
+  
+```
+```{r}
+TCGA_Masterfile_e <- cbind(TCGA_Masterfile_e, TCGA_Masterfile$Y_expression)
+```
+
+```{r}
+colnames(TCGA_Masterfile_e)[89] <- c("Y_expression")
+```
+
+```{r}
+ggplot(TCGA_Masterfile_e, aes(x=Y_expression, y=COX2_exp, fill=Y_expression)) +
+  xlab("Y_expression") +
+  ylab("COX2 Expression") +
+  geom_boxplot()  +
+  stat_compare_means(comparisons = my_comparisons, label.y = c(600)) +
+  stat_compare_means(label.y = 900)
+  
+```
+
+
+
+```{r}
+surv_object <- Surv(time = TCGA_Masterfile_e$OS_days, event = TCGA_Masterfile_e$OS)
+```
+
+```{r}
+fit0 <- survfit(surv_object ~ COX2_exp, data = TCGA_Masterfile_e)
+```
+
+```{r}
+ggsurvplot(fit0, data = TCGA_Masterfile_e, pval = TRUE, title = "OS")
+```
+
+```{r}
+surv_object0 <- Surv(time = TCGA_Masterfile_e$OS_5y_months, event = TCGA_Masterfile_NOHPV$OS_5y_event)
+```
+
+```{r}
+fit00 <- survfit(surv_object0 ~ Y_expression, data = TCGA_Masterfile_NOHPV)
+```
+
+```{r}
+ggsurvplot(fit00, data = TCGA_Masterfile_NOHPV, pval = TRUE, title = "OS 5 year event")
+```
+```{r}
+surv_object3 <- Surv(time = TCGA_Masterfile_NOHPV$DSS_5y_months, event = TCGA_Masterfile_NOHPV$DSS_5y_event)
+```
+
+```{r}
+fit3 <- survfit(surv_object3 ~ Y_expression, data = TCGA_Masterfile_NOHPV)
+```
+
+```{r}
+ggsurvplot(fit3, data = TCGA_Masterfile_NOHPV, pval = TRUE, title = "DSS 5 year event")
+```
+
+```{r}
+surv_object4 <- Surv(time = TCGA_Masterfile_NOHPV$PFI_5y_months, event = TCGA_Masterfile_NOHPV$PFI_5y_event)
+```
+
+```{r}
+fit4 <- survfit(surv_object4 ~ Y_expression, data = TCGA_Masterfile_NOHPV)
+```
+
+```{r}
+ggsurvplot(fit4, data = TCGA_Masterfile_NOHPV, pval = TRUE, title = "PFI 5 year event")
+```
+
+```{r}
+write.table(TCGA_Masterfile, "/Users/cristinacondel/Desktop/Gender_COX2/Male_TCGA_Masterfile_EDY_LOY.txt", sep = "\t", row.names = F, quote = F)
+```
+
+```{r}
+res_all <- getBM(attributes = c("hgnc_symbol", "external_gene_name", "description","chromosome_name", "gene_biotype" ), filters    = "hgnc_symbol", values = rownames(TPM_sym), mart = human)
+```
+
+```{r}
+res_all_ensmbl <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol", "external_gene_name", "description","chromosome_name", "gene_biotype" ), filters    = "ensembl_gene_id", values = rownames(Counts), mart = human)
+```
+
+
+
+```{r}
+res_y <- res_all[res_all$chromosome_name == "Y",]
+```
+
+```{r}
+res_y_ensembl <- res_all_ensmbl[res_all_ensmbl$chromosome_name == "Y",]
+```
+
+```{r}
+res_y_ensembl_cod <- res_y_ensembl[res_y_ensembl$gene_biotype == "protein_coding",]
+```
+
+```{r}
+TPM_coding_Y <- TPM_sym[res_y_ensembl_cod$hgnc_symbol,]
+```
+```{r}
+TPM_coding_Y <- na.omit(TPM_coding_Y[,TCGA_Masterfile_male$Patient_ID])
+```
+
+```{r}
+nrow(TPM_coding_Y)
+keep <- rowSums(TPM_coding_Y) > 0
+TPM_coding_Y <- TPM_coding_Y[keep,]
+nrow(TPM_coding_Y)
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TPM_coding_Y
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile_male$Gender, OS = TCGA_Masterfile_male$OS_5y_event, LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY, Y_expression = TCGA_Masterfile_male$Y_expression)
+  rownames(annotation_col)=colnames(Counts_male_Y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, filename = 'Overlaping_genes_expression_male_allgenesY_EDY_LOY_TPM_coding.png')
+```
+
+TPM_sym_difex
+
+```{r}
+res_all <- getBM(attributes = c("hgnc_symbol", "external_gene_name", "description","chromosome_name", "gene_biotype" ), filters    = "hgnc_symbol", values = rownames(TPM_sym_difex), mart = human)
+```
+
+```{r}
+prot_cod <- res_all[res_all$gene_biotype == "protein_coding",]
+```
+
+```{r}
+TPM_coding_Y <- TPM_sym[prot_cod$hgnc_symbol,]
+```
+```{r}
+TPM_coding_Y <- na.omit(TPM_coding_Y[,TCGA_Masterfile_male$Patient_ID])
+```
+
+```{r}
+nrow(TPM_coding_Y)
+keep <- rowSums(TPM_coding_Y) > 0
+TPM_coding_Y <- TPM_coding_Y[keep,]
+nrow(TPM_coding_Y)
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TPM_coding_Y
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  clustering2 <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile_male$Gender, OS = TCGA_Masterfile_male$OS_5y_event, LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY2, Y_expression = TCGA_Masterfile_male$Y_expression)
+  rownames(annotation_col)=colnames(TPM_coding_Y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, cluster_cols = clustering2, cutree_cols = 3, filename = 'Overlaping_genes_expression_male_YTPM_protcod.png')
+```
+
+```{r}
+t3 <- cutree(clustering2, k=3)
+```
+
+```{r}
+table(t3)
+```
+
+```{r}
+TCGA_Masterfile_male$Y_expression_cod <- factor(t3, levels = c(1,2,3), labels = c("Low", "Very_Low", "High"))
+```
+
+```{r}
+table(TCGA_Masterfile_male$Y_expression_OM)
+table(TCGA_Masterfile_male$Y_expression_cod, TCGA_Masterfile_male$EDY2)
+```
+
+```{r}
+surv_object0 <- Surv(time = TCGA_Masterfile_male$OS_5y_months, event = TCGA_Masterfile_male$OS_5y_event)
+```
+
+```{r}
+fit00 <- survfit(surv_object0 ~ Y_expression_cod, data = TCGA_Masterfile_male)
+```
+
+```{r}
+ggsurvplot(fit00, data = TCGA_Masterfile_male, pval = TRUE, title = "OS 5 year event")
+```
+
+```{r}
+TCGA_Masterfile_male <- TCGA_Masterfile_male[, -c(88:91)]
+```
+
+```{r}
+colnames(TCGA_Masterfile_male)[c(88,89)] <- c("Y_expression", "EDY")
+```
+
+```{r}
+write.table(TCGA_Masterfile_male, "/Users/cristinacondel/Desktop/Gender_COX2/TCGA_Metadata_Male_Ychr.txt", sep = "\t", row.names = F, quote = F)
+```
+
+```{r}
+table(TCGA_Masterfile_male$Y_expression, TCGA_Masterfile_male$LoY) 
+```
+
+
+```{r}
+TCGA_Masterfile_male_VeryLow <- TCGA_Masterfile_male[TCGA_Masterfile_male$Y_expression =="Very_Low",]
+```
+
+```{r}
+table(TCGA_Masterfile_male_VeryLow$LoY, TCGA_Masterfile_male_VeryLow$EDY)
+```
+
+```{r}
+TCGA_Masterfile_male_Low <- TCGA_Masterfile_male[TCGA_Masterfile_male$Y_expression =="Low",]
+```
+
+```{r}
+table(TCGA_Masterfile_male_Low$LoY, TCGA_Masterfile_male_Low$EDY)
+```
+
+```{r}
+prot_cod$hgnc_symbol
+```
+
+```{r}
+TPM_Ychr <- na.omit(TPM_sym[chrY_genes,])
+```
+
+```{r}
+median <- as.data.frame(rowMedians(as.matrix(TPM_Ychr)))
+rownames(median) <- rownames(TPM_Ychr)
+```
+
+```{r}
+colnames(median) <- c("Median")
+```
+
+```{r}
+median <- as.data.frame(median[order(median$Median),])
+```
+
+```{r}
+Gene_set <- read_xlsx("Y_Gene_Sets.xlsx", col_names = T) 
+```
+
+```{r}
+TPM_expr_Y <- TPM_sym[Gene_set$Median_Expression,]
+```
+
+```{r}
+TPM_expr_Y <- TPM_expr_Y[,TCGA_Masterfile_male$Patient_ID]
+```
+
+
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TPM_expr_Y
+  choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  clustering2 <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile_male$Gender, OS = TCGA_Masterfile_male$OS_5y_event, LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY, Y_expression = TCGA_Masterfile_male$Y_expression)
+  rownames(annotation_col)=colnames(TPM_expr_Y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col,cluster_cols = clustering2, cutree_cols = 3, )
+```
+
