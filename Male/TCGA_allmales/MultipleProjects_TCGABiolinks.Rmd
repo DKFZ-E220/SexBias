@@ -1,0 +1,165 @@
+---
+title: "Downloading Data with TCGABiolinks"
+subtitle: "Obtatining Data From More than One Project"
+author: "Cristina Conde López"
+date: "`r Sys.Date()`"
+output: 
+ prettydoc::html_pretty:
+    toc: true
+    theme: hpstr
+    highlight: github
+    number_sections: true
+ pdf_document:
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+---
+
+# Getting patients ID from GDC portal
+
+This data was downloaded on the 7th of March 2022 directly from the GDC portal. It comprises all the male patients from the TCGA projects that have more than 50 males registered. 
+
+```{r, eval=FALSE}
+require(data.table)
+data<-as.data.frame(fread('clinical.tsv'))
+```
+
+Loading of package TCGAbiolink (download raw data)
+
+```{r, eval=FALSE}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("TCGAbiolinks")
+```
+
+```{r, eval=FALSE}
+library (TCGAbiolinks)
+```
+
+
+Specification of data search, we store the specifications in query 
+Possible specifications (look in the GDC portal): GDCquery(
+  project,
+  data.category,
+  data.type,
+  workflow.type,
+  legacy = FALSE,
+  access,
+  platform,
+  file.type,
+  barcode,
+  data.format,
+  experimental.strategy,
+  sample.type
+)
+
+The data is splited in a list, each element having the dataset comprising the patients from each project:
+
+```{r, eval=FALSE}
+projects <- split(data, f = data$project_id)
+```
+
+The names of the projects are extracted from the names of the list:
+
+```{r, eval=FALSE}
+name_proj <- names(projects)
+```
+
+# Getting Segmented Data from Multiple Projects
+
+A loop is created in which we can download the CNV data, specifically Segmented Data, from each project, in this case all the data from all the patients is downloaded and then stored in rdata objects. This protocol was used the 7th of March 2022:
+
+```{r, eval=FALSE}
+y <- list()
+for (proj in name_proj) {
+  queryDown <- GDCquery(project = proj,
+  data.category = "Copy Number Variation",
+  data.type = "Copy Number Segment",
+  platform = "Affymetrix SNP 6.0",
+  sample.type = "Primary Tumor")
+  
+  GDCdownload(queryDown)
+  
+  myfile <- paste0("segment_data_", proj, ".rda")
+  
+  HNSC_HTseqSE <- GDCprepare(queryDown,directory = "GDCdata", save = TRUE, save.filename =
+  myfile)
+  y[[paste0(proj)]] <- HNSC_HTseqSE
+}
+```
+
+A list of datasets with Segmented Data for each project is generated and stored as a rdata object:
+
+```{r, eval=FALSE}
+list.save(y, 'TCGA_malemore50_segment_data.rdata')
+```
+
+Using the patient code derived from the clinical dataset uploaded in the first step we extract the male patients from each project, we store this information in a list and then save it as an rdata object:
+
+```{r, eval=FALSE}
+h <- list()
+for (proj in name_proj) {
+  TCGA_BLCA <- do.call(rbind.data.frame, y[proj])
+  TCGA_BLCA$Sample <- substring(TCGA_BLCA$Sample, 1, 12)
+  clinical <- do.call(rbind.data.frame, projects[proj])
+  i <- which(TCGA_BLCA$Sample %in%  clinical$case_submitter_id)
+  TCGA_BLCA <- TCGA_BLCA[i,]
+  h[[paste0(proj)]] <- TCGA_BLCA
+}
+```
+
+```{r, eval=FALSE}
+list.save(h, 'TCGA_onlymalemore50_segmented_data.rdata')
+```
+
+# Getting Count Data from Multiple Project
+
+We use again a loop to download the Count data for all the TCGA projects that comprise more than 50 men. This protocol was used the 7th of March 2022:
+
+```{r, eval=FALSE}
+x <- list()
+for (proj in name_proj) {
+  queryDown <- GDCquery(project = proj,
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  workflow.type = "HTSeq - Counts",
+  sample.type = "Primary Tumor")
+  
+  GDCdownload(queryDown)
+  
+  myfile <- paste0("counts_", proj, ".rda")
+  
+  HNSC_HTseqSE <- GDCprepare(queryDown,directory = "GDCdata", save = TRUE, save.filename =
+  myfile)
+  x[[paste0(proj)]] <- as.data.frame(SummarizedExperiment::assay(HNSC_HTseqSE))
+}
+```
+
+A list of datasets with Count Data for each project is generated and stored as a rdata object:
+
+```{r, eval=FALSE}
+list.save(x, 'TCGA_malemore50_counts.rdata')
+```
+
+Using the patient code derived from the clinical dataset uploaded in the first step we extract the male patients from each project, we store this information in a list and then save it as an rdata object:
+
+```{r, eval=FALSE}
+z <- list()
+for (proj in name_proj) {
+  TCGA_BLCA <- do.call(rbind.data.frame, x[proj])
+  names <- colnames(TCGA_BLCA)
+  names <- substr(names,1,12)
+  colnames(TCGA_BLCA) <- names
+  clinical <- do.call(rbind.data.frame, projects[proj])
+  i <- which(names %in%  clinical$case_submitter_id)
+  TCGA_BLCA <- TCGA_BLCA[,i]
+  TCGA_BLCA <- TCGA_BLCA[,sort(colnames(TCGA_BLCA))]
+  z[[paste0(proj)]] <- TCGA_BLCA
+}
+```
+
+```{r, eval=FALSE}
+list.save(z, 'TCGA_onlymalemore50_counts.rdata')
+```
