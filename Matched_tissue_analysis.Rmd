@@ -1,0 +1,144 @@
+---
+title: "Matched tissue analysis"
+author: "Cristina Conde Lopez"
+date: "5/4/2022"
+output: html_document
+---
+```{r}
+library(GEOquery)
+```
+
+```{r}
+gse=getGEO(filename="./GSE56142_series_matrix.txt.gz")
+```
+
+```{r}
+str(phenoData(gse)@data)
+```
+
+```{r}
+View(phenoData(gse)@data)
+```
+
+```{r}
+exprs <- na.omit(as.data.frame(assayData(gse)$exprs))
+```
+
+```{r}
+ids <- rownames(exprs)
+```
+
+```{r}
+mytargets <- phenoData(gse)@data[,c(1,2,42,43,44,50,51)]
+colnames(mytargets) <- c("title", "geo_accession", "Age", "Sex", "HPV", "Location", "Type")
+```
+
+```{r}
+library(illuminaHumanv4.db)
+```
+
+```{r}
+x <- as.data.frame(ls(illuminaHumanv4GENENAME))
+```
+
+```{r}
+syms <- as.data.frame(na.omit(unlist(mget(ids, illuminaHumanv4ENSEMBL))))
+```
+
+```{r}
+colnames(syms) <- c("ENSMBL")
+```
+
+```{r}
+i <- which(rownames(syms) %in% rownames(exprs))
+```
+
+```{r}
+syms1 <- syms[i,]
+```
+
+```{r}
+i <- which(rownames(exprs) %in% rownames(syms))
+```
+
+```{r}
+exprs1 <- exprs[i,]
+```
+
+```{r}
+exprs1$ENSMBL <- syms1
+```
+
+```{r}
+library("org.Hs.eg.db") # remember to install it if you don't have it already
+symbols <- mapIds(org.Hs.eg.db, keys = exprs1$ENSMBL, keytype = "ENSEMBL", column="SYMBOL")
+```
+
+```{r}
+exprs1$SYMBOL <- symbols
+```
+
+```{r}
+exprs1_symbol <- aggregate(x = exprs1[ , colnames(exprs1) != "SYMBOL" & colnames(exprs1) != "ENSMBL"],             # Mean by group
+          by = list(exprs1$SYMBOL),
+          FUN = max)
+```
+
+
+```{r}
+rownames(exprs1_symbol) <- exprs1_symbol$Group.1
+exprs1_symbol <- exprs1_symbol[,-1]
+```
+
+```{r}
+colnames(exprs1_symbol) <- mytargets$title
+```
+
+```{r}
+library(GSVA)
+library(GSEABase)
+library(GSVAdata)
+```
+
+```{r}
+genes <- geneIds(GeneSetCollection[[1]])
+genes
+```
+
+```{r}
+i <- which(rownames(exprs1_symbol) %in% genes)
+```
+
+```{r}
+exprsy <- exprs1_symbol[i,]
+```
+
+```{r}
+GSVA_Match <- gsva((as.matrix(exprs1_symbol)), GeneSetCollection, method = "gsva", annotation = "org.Hs.eg.db", min.sz=5, max.sz=500, parallel.sz = 4, kcdf="Gaussian")
+```
+
+```{r}
+mytargets$GSVA_Y_score <- GSVA_Match[1,]
+```
+
+```{r}
+rownames(mytargets) <- mytargets$title
+```
+
+```{r}
+rownames(GSVA_Match) <- c("Y Chr Sig")
+```
+
+
+```{r}
+library(pheatmap)
+  choose_matrix=GSVA_Match
+  #clustering2 <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Sex = mytargets$Sex, HPV = mytargets$HPV, Type = mytargets$Type)
+  rownames(annotation_col)=colnames(GSVA_Match)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, 
+           #cluster_cols = clustering2, cutree_cols = 3,
+           #filename = "GSVA_Match_cluster.png",
+           cluster_rows = F, cluster_cols = F)
+```
