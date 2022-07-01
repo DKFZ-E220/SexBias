@@ -517,7 +517,7 @@ saveRDS(seurat.integrated, "/omics/odcf/analysis/OE0509_projects/hnscc/single_ce
 ```
 
 ```{r}
-saveRDS(seurat.integrated, "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/seurat_integrated_cells.rds")
+saveRDS(seurat_integrated, "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/seurat_integrated_cells.rds")
 ```
 
 ```{r}
