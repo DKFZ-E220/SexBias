@@ -852,28 +852,6 @@ FeaturePlot(seurat_integrated,
 ```
 
 ```{r}
-Markers <- FindAllMarkers(seurat_integrated,
-               # Minimal logfc of the gene in the cluster we want to find vs. in others.
-               logfc.threshold = 0.25,
-               # minumun frequency in which genes are detected in the populations
-               min.pct = 0.1,
-               # Only markers that are upregulated
-               only.pos = TRUE,
-               # type of DEanalysis we're using
-               test.use = 'wilcox')
-# Not necessary to select a cluster because it iteratively compares one cluster to all the other clusters.
-```
-
-```{r}
-write_csv(Markers, "cluster_markers.csv")
-```
-
-```{r}
-markers_list <- split.data.frame(Markers, Markers$cluster)
-```
-
-
-```{r}
 features <- c("CD3D", "CD8A", "CD4", "IL7R", "FOXP3", "CD19", "CD79B", "IL3RA", "NCAM1", "NCR1", "KLRD1", "IL3RA", "CSF1R", "MSR1R", "CD14", "MS4A7", "CD68", "CD83", "FCGR1A", "LAMP3", "FPR1", "THBD", "CD80", "CD86", "CD1C", "CD209", "LYZ", "CLDN5", "FLT1", "CDH5", "RAMP2", "EPCAM", "KRT14", "KRT17", "COL1A1", "DCN", "COL1A2", "RGS5")
 ```
 
@@ -916,6 +894,31 @@ DoHeatmap(subset(seurat_integrated, downsample = 100),
 )
 
 ```
+
+### Selecting new cell markers
+
+```{r}
+Markers <- FindAllMarkers(seurat_integrated,
+               # Minimal logfc of the gene in the cluster we want to find vs. in others.
+               logfc.threshold = 0.25,
+               # minumun frequency in which genes are detected in the populations
+               min.pct = 0.1,
+               # Only markers that are upregulated
+               only.pos = TRUE,
+               # type of DEanalysis we're using
+               test.use = 'wilcox')
+# Not necessary to select a cluster because it iteratively compares one cluster to all the other clusters.
+```
+
+```{r}
+write_csv(Markers, "cluster_markers.csv")
+```
+
+```{r}
+markers_list <- split.data.frame(Markers, Markers$cluster)
+```
+
+### Defining the cell type selected for each cluster
 
 ```{r}
 seurat_integrated <- RenameIdents(seurat_integrated, `0` = 'Monocytes')
@@ -1049,6 +1052,8 @@ seurat_integrated <- RenameIdents(seurat_integrated, `8` = 'CD4+ T Cells')
 seurat_integrated <- RenameIdents(seurat_integrated, `9` = 'Monocytes')
 ```
 
+### Analysis of the Y chromosome 
+
 ```{r}
 chrY.gene <- c("DDX3Y",	"EIF1AY",	"KDM5D",	"NLGN4Y",	"RPS4Y1",	"SRY",	"TBL1Y",	"TMSB4Y",	"USP9Y",	"UTY",	"ZFY")
 ```
@@ -1115,4 +1120,68 @@ merged_seurat_filtered_transform_males <- subset(merged_seurat_filtered_transfor
 
 ```{r}
 VlnPlot(merged_seurat_filtered_transform_males, features =  "pct_chrY", group.by = "Patient")
+```
+
+```{r}
+i <- which(rownames(seurat_integrated@assays$RNA@counts) %in% chrY.gene)
+```
+
+```{r}
+Y_counts <- seurat_integrated@assays$RNA@counts[i,]
+```
+
+```{r}
+as_matrix <- function(mat){
+
+  tmp <- matrix(data=0L, nrow = mat@Dim[1], ncol = mat@Dim[2])
+  
+  row_pos <- mat@i+1
+  col_pos <- findInterval(seq(mat@x)-1,mat@p[-1])+1
+  val <- mat@x
+    
+  for (i in seq_along(val)){
+      tmp[row_pos[i],col_pos[i]] <- val[i]
+  }
+    
+  row.names(tmp) <- mat@Dimnames[[1]]
+  colnames(tmp) <- mat@Dimnames[[2]]
+  return(tmp)
+}
+```
+
+```{r}
+n <- colSums(as_matrix(seurat_integrated@assays$RNA@counts[i,])) 
+```
+
+```{r}
+m <- colSums(as_matrix(seurat_integrated@assays$RNA@counts))
+```
+
+```{r}
+seurat_integrated$pct_chrY <- n/m
+```
+
+```{r}
+integrated_males <- subset(seurat_integrated, subset = Patient == "HN01" | Patient == "HN03" | Patient == "HN04" | Patient == "HN06" | Patient == "HN07" | Patient == "HN10" | Patient == "HN11" | Patient == "HN12" | Patient == "HN13" | Patient == "HN14" | Patient == "HN16" | Patient == "HN17" | Patient == "HN18")
+```
+
+```{r}
+VlnPlot(integrated_males, features =  "pct_chrY", split.by = "Patient", group.by = "cell_types")
+
+```
+
+```{r}
+idents <- as.data.frame(Idents(integrated_males))
+```
+
+```{r}
+integrated_males@meta.data$cell_types <- idents$`Idents(integrated_males)`
+```
+
+```{r}
+integrated_males_EC <- subset(integrated_males, subset = cell_types == "Epithelial Cells")
+```
+
+```{r}
+VlnPlot(integrated_males_EC, features =  "pct_chrY", split.by = "Patient", group.by = "cell_types")
 ```

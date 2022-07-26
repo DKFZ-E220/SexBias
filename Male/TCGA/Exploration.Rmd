@@ -1,0 +1,33 @@
+---
+title: "Untitled"
+output: html_document
+date: '2022-07-25'
+---
+
+```{r}
+table(TCGA_Metadata_Male_Ychr$clinical_stage, TCGA_Metadata_Male_Ychr$LoY)
+```
+
+```{r}
+i <- which(colnames(TCGA_TPM_symbol) %in% TCGA_Metadata_Male_Ychr$Patient_ID)
+```
+
+```{r}
+rownames(TCGA_Metadata_Male_Ychr) <- TCGA_Metadata_Male_Ychr$Patient_ID
+```
+
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TCGA_TPM_symbol[,i]
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))  
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(LoY = TCGA_Metadata_Male_Ychr$LoY, EDY = TCGA_Metadata_Male_Ychr$EDY, Stage = TCGA_Metadata_Male_Ychr$clinical_stage)
+  rownames(annotation_col)=colnames(TCGA_TPM_symbol[,i])
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col
+           #,
+           #filename = 'Overlaping_genes_expression_genename.png'
+           )
+  
+```

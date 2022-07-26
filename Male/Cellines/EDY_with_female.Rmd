@@ -1,0 +1,98 @@
+```{r, message=FALSE}
+library(readr)
+cell_counts <- read_csv("cell_counts.cvs")
+```
+
+```{r}
+cell_counts$ENSEMBL <- gsub("\\..*","",cell_counts$Name)
+```
+
+```{r}
+cell_counts <- aggregate(. ~ ENSEMBL, data = cell_counts, max)
+```
+
+```{r}
+cell_counts1 <- cell_counts
+rownames(cell_counts1) <- cell_counts1$ENSEMBL
+```
+```{r}
+cell_counts1 <- cell_counts1[,c(-1,-2,-3,-4)]
+```
+
+```{r}
+my.genes <- rownames(cell_counts1)
+```
+
+```{r}
+cell_counts2 <- sapply(cell_counts1, as.numeric)
+```
+
+```{r}
+rownames(cell_counts2) <- rownames(cell_counts1)
+```
+
+```{r}
+cellines_TPM <- as.data.frame(tpm3(cell_counts2, exonic.gene.sizes))
+```
+
+```{r}
+cellines_TPM$symbol <- mapIds(org.Hs.eg.db,
+                     keys=rownames(cellines_TPM),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+cellines_TPM_symbol <- aggregate(. ~ symbol, data = cellines_TPM, max)
+row.names(cellines_TPM_symbol) <- cellines_TPM_symbol$symbol
+```
+
+```{r}
+celllines_TPM_sym <- cellines_TPM_symbol[,c(-1)]
+```
+
+```{r}
+GSVA_TPM <- gsva((as.matrix(celllines_TPM_sym)), GeneSetCollection, method = "gsva", annotation = "org.Hs.eg.db", min.sz=5, max.sz=500, parallel.sz = 4, kcdf="Gaussian")
+```
+
+```{r}
+GSVA_TPM <- as.data.frame(GSVA_TPM)
+```
+
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/CellLines")
+Clinical_cell <- read.table("cBioclinicaldata.txt", sep = "\t" )
+hn_samples <- read.table("hnn_sample.txt", sep = "\t" )
+```
+
+```{r}
+# Which are Upper Aerodigestive Track samples
+i <- which(Clinical_cell$V1 %in% hn_samples$V1)
+hn_clinical <- Clinical_cell[i,] 
+```
+
+```{r}
+i <- which(colnames(GSVA_TPM) %in% hn_clinical$V1)
+GSVA_Cell <- GSVA_TPM[,i]
+```
+
+```{r}
+i <- which(hn_clinical$V1 %in% colnames(GSVA_TPM))
+hn_clinical_final <- hn_clinical[i,]
+```
+
+```{r}
+hn_clinical_final$Y_Chr <- c(GSVA_Cell[1,])
+```
+
+```{r}
+ggplot(hn_clinical_final, aes(x=V4, y=as.numeric(Y_Chr), fill=V4)) +
+  xlab("Sex") +
+  ylab("GSVA score") +
+  geom_violin(trim=F) +
+  geom_boxplot(width=0.1)
+```
+
+```{r}
+hn_cell_female <- hn_clinical_final[hn_clinical_final$V4 == "F",]
+max(as.numeric(hn_cell_female$Y_Chr))
+```
