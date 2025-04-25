@@ -1,0 +1,544 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-02-01"
+---
+
+```{r}
+library(Seurat)
+library(SeuratDisk)
+library(SeuratWrappers)
+library(UCell)
+
+library(patchwork)
+library(harmony)
+library(rliger)
+library(reshape2)
+library(RColorBrewer)
+library(dplyr)
+library(plyr)
+
+library(ProjecTILs)
+library(STACAS)
+library(ggplot2)
+library(SignatuR)
+library(UCell)
+
+HNSC_combined <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/HNSC_combined.rds")
+HNSC_combined$HPV <- revalue(HNSC_combined$HPV, c("Negative"="HPV-", "Positive"="HPV+"))
+HNSC_combined <- subset(HNSC_combined, subset = (Source == "CD45p" | Source == "CD45n" | Source == "Primary" | Source == "CA" | Source == "Unknown primary of the head and neck"))
+tumor_combined4 <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/Tumor_combined/tumor_combined4.rds")
+
+rownames(tumor_combined4@meta.data) <- gsub("Kürten", "Kurten", rownames(tumor_combined4@meta.data))
+
+tumor <- data.frame(Cell = rownames(tumor_combined4@meta.data), Tumor = c(rep("Tumor",length(rownames(tumor_combined4@meta.data)))))
+data <- data.frame(Cell = rownames(HNSC_combined@meta.data), Tumor = c(rep(1,length(rownames(HNSC_combined@meta.data)))))
+
+merged_data <- merge(data, tumor, by = "Cell", all.x = TRUE)
+
+i <- which(merged_data$Tumor.y == "Tumor")
+merged_data$Tumor.y[-i] <- c("Normal")
+
+HNSC_combined$Cell_Labels <- rownames(HNSC_combined@meta.data)
+
+HNSC_combined@meta.data <- HNSC_combined@meta.data %>%
+  left_join(merged_data, by = c("Cell_Labels" = "Cell"))
+
+HNSC_combined$Cells_Tumor <- ifelse(HNSC_combined$Tumor.y == "Tumor", "Tumor", HNSC_combined$scGate_multi)
+```
+
+```{r}
+sex <- list()
+sex[[1]] <- subset(HNSC_combined, subset = (Sex == "Male"))
+sex[[2]] <- subset(HNSC_combined, subset = (Sex == "Female"))
+names(sex) <- c("Male", "Female")
+saveRDS(sex, "MF_list.rds")
+```
+
+```{r}
+color <-c("Bcell"= "#8dd3c7","CD4T" = "#ffffb3","CD8T" = "#bebada","Endothelial"= "#fb8072","Epithelial"= "#ffed6f","Fibroblast" = "#b3de69" ,"Macrophage"= "#fdb462","Mast" = "#fccde5","Monocyte"= "#d9d9d9","Multi" = "#bc80bd" , "Neutrophils"= "#ccebc5", "NK"= "#6a3d9a" , "panDC"= "#1f78b4" , "PlasmaCell" = "#c51b8a", "Tumor" = "#80b1d3")
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs_female")
+i <- which(rownames(HNSC_combined) == "AXL")
+metadata <- na.omit(data.frame(Cluster = HNSC_combined@meta.data$Cells_Tumor, AXL= HNSC_combined[i,], Sex = HNSC_combined@meta.data$Sex))
+```
+
+```{r}
+VlnPlot(HNSC_combined,features = c("AXL"), group.by = "Cells_Tumor")
+VlnPlot(HNSC_combined,features = c(), group.by = "Cells_Tumor")
+```
+
+```{r}
+color <-c("Bcell"= "#8dd3c7","CD4T" = "#ffffb3","CD8T" = "#bebada","Endothelial"= "#fb8072","Epithelial"= "#ffed6f","Fibroblast" = "#b3de69" ,"Macrophage"= "#fdb462","Mast" = "#fccde5","Monocyte"= "#d9d9d9","Multi" = "#bc80bd" , "Neutrophils"= "#ccebc5", "NK"= "#6a3d9a" , "panDC"= "#1f78b4" , "PlasmaCell" = "#c51b8a", "Tumor" = "#80b1d3")
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs_female")
+
+metadata <- na.omit(data.frame(Cluster = HNSC_combined$Cells_Tumor, Group = HNSC_combined$Sex, HPV = HNSC_combined$HPV))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  
+```
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs_female")
+theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Sex") + ylab("Percent") + labs(fill = "Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("FM_Cell", "_relative_number.pdf")
+  ggsave(graph)
+```
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs_female")
+theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Sex") + ylab("Percent") + labs(fill = "CD8T Cell Type") +
+  facet_grid(. ~ HPV)
+  
+  graph <- paste0("MF_Cell_Type", "_absolute_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+HNSC_combined_immune <- subset(HNSC_combined, subset = Cells_Tumor %in% c("Bcell","CD4T","CD8T", "Macrophage","Mast","Monocyte","Neutrophils","NK", "panDC" ))
+
+color <-c("Bcell"= "#8dd3c7","CD4T" = "#ffffb3","CD8T" = "#bebada","Macrophage"= "#b3de69","Mast" = "#fccde5","Monocyte"= "#bc80bd", "Neutrophils"= "#ccebc5", "NK"= "#c51b8a" , "panDC"= "#1f78b4")
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs_female")
+
+metadata <- na.omit(data.frame(Cluster = HNSC_combined_immune$Cells_Tumor, Group = HNSC_combined_immune$Sex, HPV = HNSC_combined_immune$HPV))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Sex") + ylab("Percent") + labs(fill = "Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("MF_ImmuneCell", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+#HNSC_combined_immune <- subset(HNSC_combined, subset = Cells_Tumor %in% c("Bcell","CD4T","CD8T", "Macrophage","Mast","Monocyte","Neutrophils","NK", "panDC" ))
+color <-c("Bcell"= "#8dd3c7","CD4T" = "#ffffb3","CD8T" = "#bebada","Macrophage"= "#b3de69","Mast" = "#fccde5","Monocyte"= "#bc80bd", "Neutrophils"= "#ccebc5", "NK"= "#c51b8a" , "panDC"= "#1f78b4")
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs_female")
+
+metadata <- na.omit(data.frame(Cluster = HNSC_combined_immune$Cells_Tumor, Group = HNSC_combined_immune$Sex, HPV = HNSC_combined_immune$HPV))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Sex") + ylab("Percent") + labs(fill = "CD8T Cell Type") +
+  facet_grid(. ~ HPV)
+  
+  graph <- paste0("MF_ImmuneCell", "_absolute_number.pdf")
+  ggsave(graph)
+  
+```
+
+
+```{r}
+cd8tcell <- subset(HNSC_combined, subset= (scGate_multi == "CD8T"))
+options(timeout = max(900, getOption("timeout")))
+download.file("https://figshare.com/ndownloader/files/41414556", destfile = "CD8T_human_ref_v1.rds")
+ref.cd8 <- load.reference.map("CD8T_human_ref_v1.rds")
+DefaultAssay(cd8tcell) <- "RNA"
+cd8tcell <- ProjecTILs.classifier(query = cd8tcell, ref = ref.cd8, filter.cells = F)
+saveRDS(cd8tcell, "CD8T_MF.rds")
+cd8tcell$CD8Type <- cd8tcell$functional.cluster
+```
+
+```{r}
+#cd8tcell <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/CD8T_MF_good.rds")
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs_female")
+                                  
+color <-c("CD8.CM"= "#8dd3c7","CD8.EM"  = "#ffffb3","CD8.MAIT" = "#bebada","CD8.NaiveLike"= "#fccde5","CD8.TEMRA" = "#80b1d3","CD8.TEX" = "#fdb462","CD8.TPEX"= "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = cd8tcell@meta.data$CD8Type, Group = cd8tcell@meta.data$Sex, HPV = cd8tcell@meta.data$HPV))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD8T Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Sex") + ylab("Percent") + labs(fill = "CD8T Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("MF_CD8T_CellType", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs_female")
+                                  
+color <-c("CD8.CM"= "#8dd3c7","CD8.EM"  = "#ffffb3","CD8.MAIT" = "#bebada","CD8.NaiveLike"= "#fccde5","CD8.TEMRA" = "#80b1d3","CD8.TEX" = "#fdb462","CD8.TPEX"= "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = cd8tcell@meta.data$CD8Type, Group = cd8tcell@meta.data$Sex, HPV = cd8tcell@meta.data$HPV))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD8T Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Sex") + ylab("Percent") + labs(fill = "CD8T Cell Type") +
+  facet_grid(.~ HPV) 
+  graph <- paste0("MF_CD8T_CellType", "_absolute_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+cd4tcell <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/CD4T_MF.rds")
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs_female")
+                                                   
+color <-c("CD4.CTL_EOMES"= "#8dd3c7","CD4.CTL_Exh"  = "#ffffb3","CD4.CTL_GNLY" = "#bebada","CD4.NaiveLike"= "#fccde5","CD4.Tfh" = "#80b1d3","CD4.Th17"  = "#fdb462","CD4.Treg" = "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = cd4tcell@meta.data$CD4Type, Group = cd4tcell@meta.data$Sex, HPV = cd4tcell@meta.data$HPV))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD4T Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Sex") + ylab("Percent") + labs(fill = "CD4T Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("MF_CD4T_CellType", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs_female")
+   
+                                                   
+color <-c("CD4.CTL_EOMES"= "#8dd3c7","CD4.CTL_Exh"  = "#ffffb3","CD4.CTL_GNLY" = "#bebada","CD4.NaiveLike"= "#fccde5","CD4.Tfh" = "#80b1d3","CD4.Th17"  = "#fdb462","CD4.Treg" = "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = cd4tcell@meta.data$CD4Type, Group = cd4tcell@meta.data$Sex, HPV = cd4tcell@meta.data$HPV))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD4T Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Sex") + ylab("Cell Number") + labs(fill = "CD4T Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("MF_CD4T_CellType", "_absolute_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+dccell <- subset(HNSC_combined, subset= (scGate_multi == "panDC"))
+options(timeout = max(900, getOption("timeout")))
+download.file("https://figshare.com/ndownloader/files/39119888", destfile = "DC_human_ref_v1.rds")
+ref.dc <- load.reference.map("DC_human_ref_v1.rds")
+
+dccell <- ProjecTILs.classifier(query = dccell, ref = ref.dc, filter.cells = F)
+dccell$DCType <- dccell$functional.cluster
+```
+
+```{r}
+dccell <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/DC_MF.rds")
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs_female")
+                                                                                        
+color <-c("AS-DC"= "#8dd3c7","cDC1"  = "#ffffb3","cDC2_CD1A" = "#bebada","cDC2_CLEC10A"= "#fccde5","DC3"  = "#80b1d3","MonoDC"  = "#fdb462","pDC"  = "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = dccell@meta.data$DCType, Group = dccell@meta.data$Sex, HPV = dccell@meta.data$HPV))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("DC Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Sex") + ylab("Percent") + labs(fill = "DC Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("MF_DC_CellType", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs_female")
+                                                                                        
+color <-c("AS-DC"= "#8dd3c7","cDC1"  = "#ffffb3","cDC2_CD1A" = "#bebada","cDC2_CLEC10A"= "#fccde5","DC3"  = "#80b1d3","MonoDC"  = "#fdb462","pDC"  = "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = dccell@meta.data$DCType, Group = dccell@meta.data$Sex, HPV = dccell@meta.data$HPV))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("DC Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Sex") + ylab("Cell Number") + labs(fill = "DC Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("MF_DC_CellType", "_absolute_number.pdf")
+  ggsave(graph)
+```
+
+
+```{r}
+for (i in file){
+  
+meta <- Neg_Hig@meta.data
+data.input <- GetAssayData(Neg_Hig, assay = "RNA", slot = "data")
+cellchat <- createCellChat(object = data.input, meta = meta, group.by = "Cells_Tumor")
+CellChatDB <- CellChatDB.human # use CellChatDB.mouse if running on mouse data
+showDatabaseCategory(CellChatDB)
+#CellChatDB.use <- subsetDB(CellChatDB, search = "Secreted Signaling", key = "annotation") # use Secreted Signaling
+# use all CellChatDB for cell-cell communication analysis
+CellChatDB.use <- CellChatDB # simply use the default CellChatDB
+
+# set the used database in the object
+cellchat@DB <- CellChatDB.use
+cellchat <- subsetData(cellchat) # This step is necessary even if using the whole database
+future::plan("multisession", workers = 4) # do parallel
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+
+# project gene expression data onto PPI (Optional: when running it, USER should set `raw.use = FALSE` in the function `computeCommunProb()` in order to use the projected data)
+cellchat <- projectData(cellchat, PPI.human)
+cellchat@idents = droplevels((cellchat@idents), exclude = setdiff(levels(cellchat@idents),unique(cellchat@idents)))
+
+# 5. Compute the communication probability and infer cellular communication network
+cellchat <- computeCommunProb(cellchat, raw.use = FALSE) 
+
+# 6. Filter out the cell-cell communication min.cells = 10
+cellchat <- filterCommunication(cellchat, min.cells = 10)
+
+# 7. Infer the cell-cell communication at a signaling pathway level
+cellchat <- computeCommunProbPathway(cellchat)
+
+# 8. Calculate the aggregated cell-cell communication network
+cellchat <- aggregateNet(cellchat)
+
+# 9. Compute the network centrality scores
+cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
+
+# 10. Identify and visualize outgoing communication pattern of secreting cells
+#selectK(cellchat, pattern = "outgoing") 
+nPatterns = 3 
+cellchat <- identifyCommunicationPatterns(cellchat, pattern = "outgoing",
+                                      k = nPatterns, width = 5, height = 9)
+
+# 11. Identify and visualize incoming communication pattern of target cells
+#selectK(cellchat, pattern = "incoming")
+nPatterns = 3
+cellchat <- identifyCommunicationPatterns(cellchat,pattern = "incoming", 
+                                      k = nPatterns, width = 5, height = 9)
+
+# 12. Identify signaling groups based on functional similarity
+cellchat <- computeNetSimilarity(cellchat, type = "functional")
+cellchat <- netEmbedding(cellchat, type = "functional")
+cellchat <- netClustering (cellchat, type = "functional", do.parallel = FALSE)
+
+# 13. Identify signaling groups based on structure similarity
+cellchat <- computeNetSimilarity(cellchat, type = "structural")
+cellchat <- netEmbedding(cellchat, type = "structural")
+cellchat <- netClustering(cellchat, type = "structural", do.parallel = FALSE)
+
+# 14. Save NL cellchat object
+saveRDS(cellchat, file=i)
+}
+
+```
+
+

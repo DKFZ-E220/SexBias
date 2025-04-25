@@ -1,0 +1,1178 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-01-31"
+---
+
+```{r}
+library(Seurat)
+library(SeuratDisk)
+library(SeuratWrappers)
+library(UCell)
+library(patchwork)
+library(harmony)
+library(rliger)
+library(reshape2)
+library(RColorBrewer)
+library(dplyr)
+library(stringr) 
+library(plyr)
+library(GSVA)
+library(GSEABase)
+library(GSVAdata)
+library(ggplot2)
+```
+
+```{r}
+Male_PT <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Male_PT.rds")
+tumor <- subset(Male_PT, subset = Tumor == "Tumor")
+obj.list <- SplitObject(tumor, split.by = c("HPV"))
+
+
+bulk.list <- list()
+for (i in 1:length(obj.list)){
+  bulk.list[[i]] <- Seurat:::PseudobulkExpression(object = obj.list[[i]], pb.method = 'aggregate', slot = 'counts', group.by = "Patient")
+  names(bulk.list)[i] <- names(obj.list)[i]
+}
+
+GeneSetCollection <- getGmt("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA/EDY/genesignature_Y_chromosome.gmt")
+GSVA.list <- list()
+for (i in 1:length(bulk.list)){
+  GSVA.list[[i]] <- gsva((as.matrix(bulk.list[[i]]$RNA)), GeneSetCollection, method = "gsva", annotation = "org.Hs.eg.db", min.sz=5, max.sz=500, parallel.sz = 4, kcdf="Poisson")
+  names(GSVA.list)[i] <- names(bulk.list)[i]
+}
+
+data.list <- list()
+data.list_asc <- list()
+for (i in 1:length(GSVA.list)){
+  data.list[[i]] <- data.frame(Ychrom = GSVA.list[[i]][1,], Patient = colnames(GSVA.list[[i]]))
+  data.list[[i]] <- data.list[[i]][order(data.list[[i]]$Patient),]
+  names(data.list)[i] <- names(GSVA.list)[i]
+  
+    p33 <- quantile(data.list[[i]]$Ychrom, probs = seq(0.33, 0.66))
+    p66 <- quantile(data.list[[i]]$Ychrom, probs = seq(0.66, 0.99))
+
+     Group <- c()
+       for (a in 1:length(data.list[[i]]$Ychrom)){
+          if (data.list[[i]]$Ychrom[a] <= p33 ) {
+          Group[a] = c("Low")
+          } else if (data.list[[i]]$Ychrom[a] >= p66) {
+          Group[a] = c("High")
+          }else {
+          Group[a] = c("Intermediate")
+       }
+     }
+
+    data.list[[i]]$Group <- Group
+    data.list_asc[[i]] <- data.list[[i]][order(data.list[[i]]$Ychrom),]
+}
+data.list <- do.call(rbind.data.frame, data.list)
+data <- data.frame(Patient = Male_PT@meta.data$Patient, Group = c(rep(1,length(Male_PT@meta.data$Patient))))
+merged_data <- merge(data, data.list, by = "Patient", all.x = TRUE)
+order_vector <- match(Male_PT$Patient, merged_data$Patient)
+b <- c()
+b <- as.data.frame(merged_data$Group.y[order_vector])
+colnames(b) <- c("Group_4")
+rownames(b) <- rownames(Male_PT@meta.data)
+Male_PT$Group_4 <- b$Group_4
+```
+
+```{r}
+library(CellChat)
+library(patchwork)
+options(stringsAsFactors = FALSE)
+#reticulate::use_python("/Users/suoqinjin/anaconda3/bin/python", required=T)
+```
+
+```{r}
+Male_PT$Cells_Tumor <- ifelse(Male_PT$Tumor == "Tumor", "Tumor", Male_PT$scGate_multi)
+Neg_Hig <- subset(Male_PT, subset = HPV == c("HPV-"))
+Neg_Hig <- subset(Neg_Hig, subset = Group_4 == c("High"))
+Idents(Neg_Hig) <- c("Cells_Tumor")
+```
+
+```{r}
+meta <- Neg_Hig@meta.data
+data.input <- GetAssayData(Neg_Hig, assay = "RNA", slot = "data")
+```
+
+
+```{r}
+cellchat <- createCellChat(object = data.input, meta = meta, group.by = "Cells_Tumor")
+```
+
+```{r}
+CellChatDB <- CellChatDB.human # use CellChatDB.mouse if running on mouse data
+showDatabaseCategory(CellChatDB)
+#CellChatDB.use <- subsetDB(CellChatDB, search = "Secreted Signaling", key = "annotation") # use Secreted Signaling
+# use all CellChatDB for cell-cell communication analysis
+CellChatDB.use <- CellChatDB # simply use the default CellChatDB
+
+# set the used database in the object
+cellchat@DB <- CellChatDB.use
+```
+
+```{r}
+levels(cellchat@idents) 
+```
+
+```{r}
+# subset the expression data of signaling genes for saving computation cost
+cellchat <- subsetData(cellchat) # This step is necessary even if using the whole database
+future::plan("multisession", workers = 4) # do parallel
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+
+# project gene expression data onto PPI (Optional: when running it, USER should set `raw.use = FALSE` in the function `computeCommunProb()` in order to use the projected data)
+cellchat <- projectData(cellchat, PPI.human)
+```
+
+```{r}
+cellchat@idents = droplevels((cellchat@idents), exclude = setdiff(levels(cellchat@idents),unique(cellchat@idents)))
+unique(cellchat@idents)
+cellchat <- computeCommunProb(cellchat, type = "triMean")
+cellchat <- filterCommunication(cellchat, min.cells = 10)
+# 6. Infer the cell-cell communication at a signaling pathway level
+cellchat <- computeCommunProbPathway(cellchat)
+
+# 7. Calculate the aggregated cell-cell communication network
+cellchat <- aggregateNet(cellchat)
+```
+
+
+
+
+```{r}
+cellchat@netP[["pathways"]]
+
+extractEnrichedLR(cellchat, signaling = c(cellchat@netP[["pathways"]]),
+                  geneLR.return = TRUE)
+
+# visualize the contribution of each LR pairs to the communication network
+netAnalysis_contribution(cellchat, 
+                         signaling = c(cellchat@netP[["pathways"]]), 
+                         title = "Contribution of each LR pairs")
+
+netAnalysis_contribution(cellchat, 
+                         signaling = c(cellchat@netP[["pathways"]][1:5]), 
+                         title = "MIF,GALECTIN,CXCL,IL2,COMPLEMENT")
+
+extractEnrichedLR(cellchat, signaling = "TNF", geneLR.return = FALSE)
+netAnalysis_contribution(cellchat, signaling = "TNF")
+
+extractEnrichedLR(cellchat, signaling = "CCL", geneLR.return = FALSE)
+netAnalysis_contribution(cellchat, signaling = "CCL")
+```
+
+
+```{r}
+# Circle plot
+netVisual_aggregate(cellchat, signaling = "COLLAGEN", layout = "circle")
+netVisual_individual(cellchat, signaling = "CCL", layout = "circle")
+netVisual_individual(cellchat, signaling = "MIF", 
+                     pairLR.use = "MIF_CD74_CXCR4",
+                     layout = "circle")
+```
+
+```{r}
+# Chord diagram
+par(mfrow = c(1, 1), xpd=TRUE)
+par(cex = 0.5)
+netVisual_aggregate(cellchat, signaling = "MHC-I", layout = "chord")
+netVisual_chord_cell (cellchat, signaling = "MHC-I")
+netVisual_chord_gene (cellchat, signaling = "MHC-I")
+```
+
+
+```{r}
+# Chord diagram: group cell clusters into fibroblast, DC and TC cells 
+group.cellType <- c(rep("FIB", 4), rep("DC", 4), rep("TC", 4))
+names(group.cellType) <- levels(cellchat@idents)
+par(mfrow = c(1, 1), xpd=TRUE)
+par(cex = 0.5)
+netVisual_chord_cell(cellchat, signaling = "TNF", 
+    group = group.cellType, 
+    title.name = paste0("TNF_", "signaling network"))
+
+# Chord diagram: define source and target cell types
+netVisual_chord_gene(cellchat, sources.use = 15, targets.use = c(1:3), 
+                     lab.cex = 0.5)
+
+netVisual_chord_gene(cellchat, sources.use = c(1,2,3,4), targets.use = 8,
+                     lab.cex = 0.5, legend.pos.x = 15)
+
+# Chord diagram: show LR pairs associated with certain signaling pathways
+netVisual_chord_gene(cellchat, sources.use = c(1,2,3,4), targets.use = 8,
+                     signaling = c("CCL","CXCL"),legend.pos.x = 8)
+```
+
+
+```{r}
+# Hierarchy plot 
+vertex.receiver = c(4,5,6,15) # define the left portion of cell groups  
+netVisual_aggregate(cellchat, signaling = "MHC-I", 
+           vertex.receiver = vertex.receiver, layout = "hierarchy")
+netVisual_individual(cellchat, signaling = "COLLAGEN", 
+                     pairLR.use = "COL1A1_ITGA1_ITGB1", 
+                     vertex.receiver = vertex.receiver, 
+                     layout = "hierarchy" )
+```
+
+
+```{r}
+# Heatmap
+netVisual_heatmap(cellchat, signaling = "TNF", color.heatmap = "Reds")
+
+# Violin plot 
+plotGeneExpression(cellchat, signaling = "TNF")
+```
+
+
+```{r}
+# bubble plot 
+# bubble plot: show all LR pairs from source to target cell groups
+netVisual_bubble(cellchat, sources.use = 15, targets.use = c(1:3,7:9,11:13), 
+                 remove.isolate = FALSE)
+```
+```{r}
+# bubble plot 
+# bubble plot: show all LR pairs from source to target cell groups
+netVisual_bubble(cellchat, sources.use = c(1:3,7:9,11:13), targets.use = 15, 
+                 remove.isolate = FALSE)
+```
+
+
+```{r}
+# bubble plot: show LR pairs associated with certain signaling pathways
+netVisual_bubble(cellchat, sources.use = 4, targets.use = c(5:12), 
+                 signaling = c("CCL","CXCL"), remove.isolate = FALSE)
+```
+
+
+
+# Part V: Systematic analysis of cell-cell communication networks
+```{r}
+library(CellChat)
+library(NMF)
+library(ggalluvial)
+```
+
+```{r}
+levels(cellchat@idents)
+```
+```{r}
+ cellchat_subset <- subsetCellChat(cellchat, idents.use = c("Bcell","CD4T","CD8T","Endothelial","Epithelial","Fibroblast","Macrophage","Mast","Monocyte","Multi","Neutrophils","NK","panDC","PlasmaCell","Tumor"))
+```
+```{r}
+cellchat <- cellchat_subset
+```
+
+```{r}
+# 1. Compute the network centrality scores
+cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
+```
+
+```{r}
+# Scatter plot to visualize aggregated communication networks for each cell type
+netAnalysis_signalingRole_scatter(cellchat) # all signaling pathways
+```
+
+```{r}
+# Scatter plot to Visualize selected communication networks
+netAnalysis_signalingRole_scatter(cellchat, signaling = "TNF")
+netAnalysis_signalingRole_scatter(cellchat, signaling = c("CXCL", "CCL"))
+```
+
+```{r}
+# Heatmap to visualize dominant cell types for each signaling pathway
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Cell_Chat/heatmap_NegLow.pdf", width=6, height=6)
+netAnalysis_signalingRole_heatmap(cellchat, pattern = "outgoing", height = 11,font.size = 3.5)
+dev.off()
+
+```
+
+```{r}
+# Heatmap to visualize dominant cell types for each signaling pathway
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Cell_Chat/heatmap_incomingsingals_NegLow.pdf", width=6, height=6)
+netAnalysis_signalingRole_heatmap(cellchat, pattern = "incoming", height = 11,font.size = 3.5)
+dev.off()
+
+```
+
+```{r}
+# Visualize selected outgoing/incoming signals and contributing cell types
+netAnalysis_signalingRole_heatmap(cellchat, pattern = "outgoing",
+                                      signaling = c("CXCL", "CCL"))
+netAnalysis_signalingRole_heatmap(cellchat, pattern = "incoming",
+                                      signaling = c("CXCL", "CCL"))
+```
+
+```{r}
+# Heatmap to visualize major signaling roles of different cell groups
+netAnalysis_signalingRole_network(cellchat, signaling = "MIF", width = 10, 
+                                  height = 5, font.size = 10)
+```
+
+
+# 2. Identify global communication patterns to explore how multiple cell types 
+# and signaling pathways coordinate
+
+```{r}
+# Identify and visualize outgoing communication pattern of secreting cells
+selectK(cellchat, pattern = "outgoing") # infer the number of patterns, NMF
+nPatterns = 3 # a suitable number of patterns is the one begin to drop suddenly.
+```
+```{r}
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Cell_Chat/patterns_outgoing_NegLow.pdf", width=6, height=6)
+cellchat <- identifyCommunicationPatterns(cellchat, pattern = "outgoing",
+                  k = nPatterns, width = 5, height = 9, font.size = 3)
+dev.off()
+```
+
+
+
+```{r}
+netAnalysis_river(cellchat, pattern = "outgoing") # river plot
+netAnalysis_dot(cellchat, pattern = "outgoing") # dot plot
+```
+
+```{r}
+## Identify and visualize incoming communication pattern of target cells
+selectK(cellchat, pattern = "incoming")
+nPatterns = 3
+cellchat <- identifyCommunicationPatterns(cellchat,pattern = "incoming", 
+                  k = nPatterns, width = 5, height = 9)
+
+netAnalysis_river(cellchat, pattern = "incoming") # river plot
+netAnalysis_dot(cellchat, pattern = "incoming") # dot plot
+```
+
+```{r}
+# 3. Groups signaling pathways based on their functional/structural similarities
+# Identify signaling groups based on functional similarity
+cellchat <- computeNetSimilarity(cellchat, type = "functional")
+cellchat <- netEmbedding(cellchat, type = "functional")
+cellchat <- netClustering (cellchat, type = "functional", do.parallel = FALSE)
+```
+
+```{r}
+# Visualization in 2D-space
+netVisual_embedding(cellchat, type = "functional", label.size = 3.5)
+netVisual_embeddingZoomIn(cellchat, type = "functional", nCol = 2)
+```
+
+```{r}
+# Identify signaling groups based on structure similarity
+# multimeric ligand-receptor complexes, soluble agonists and antagonists, 
+# stimulatory and inhibitory co-ligands and co-receptors
+cellchat <- computeNetSimilarity(cellchat, type = "structural")
+cellchat <- netEmbedding(cellchat, type = "structural")
+cellchat <- netClustering(cellchat, type = "structural",do.parallel = FALSE)
+```
+
+```{r}
+# Visualization in 2D-space
+netVisual_embedding(cellchat, type = "structural", label.size = 3.5)
+netVisual_embeddingZoomIn(cellchat, type = "structural", nCol = 2)
+```
+
+
+cellchat <- createCellChat(object = data.input, meta = meta, group.by = "labels")
+
+# 2. Add the Secreted Signaling database in the CellChat object
+CellChatDB.use <- subsetDB(CellChatDB.human, search = "Secreted Signaling")
+cellchat@DB <- CellChatDB.use
+
+# 3.Subset and pre-processing the expression data 
+cellchat <- subsetData(cellchat)
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+
+# 4. project gene expression data onto protein-protein interaction (PPI)
+cellchat <- projectData(cellchat, PPI.human) # PPI.mouse for mouse samples
+
+# 5. Compute the communication probability and infer cellular communication network
+cellchat <- computeCommunProb(cellchat, raw.use = FALSE) 
+
+# 6. Filter out the cell-cell communication min.cells = 10
+cellchat <- filterCommunication(cellchat, min.cells = 10)
+
+# 7. Infer the cell-cell communication at a signaling pathway level
+cellchat <- computeCommunProbPathway(cellchat)
+
+# 8. Calculate the aggregated cell-cell communication network
+cellchat <- aggregateNet(cellchat)
+
+# 9. Compute the network centrality scores
+cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
+
+# 10. Identify and visualize outgoing communication pattern of secreting cells
+selectK(cellchat, pattern = "outgoing") 
+nPatterns = 2 
+cellchat <- identifyCommunicationPatterns(cellchat, pattern = "outgoing",
+                                      k = nPatterns, width = 5, height = 9)
+
+# 11. Identify and visualize incoming communication pattern of target cells
+selectK(cellchat, pattern = "incoming")
+nPatterns = 3
+cellchat <- identifyCommunicationPatterns(cellchat,pattern = "incoming", 
+                                      k = nPatterns, width = 5, height = 9)
+
+# 12. Identify signaling groups based on functional similarity
+cellchat <- computeNetSimilarity(cellchat, type = "functional")
+cellchat <- netEmbedding(cellchat, type = "functional")
+cellchat <- netClustering (cellchat, type = "functional", do.parallel = FALSE)
+
+# 13. Identify signaling groups based on structure similarity
+cellchat <- computeNetSimilarity(cellchat, type = "structural")
+cellchat <- netEmbedding(cellchat, type = "structural")
+cellchat <- netClustering(cellchat, type = "structural", do.parallel = FALSE)
+
+# 14. Save NL cellchat object
+saveRDS(cellchat, 
+  file="../Desktop/Video_Tutorials/Cellchat/cellchat_humanSkin_NL_analysed.rds")
+
+# 15. load both NL and LS objects
+cellchat.NL <- readRDS(
+  "../Desktop/Video_Tutorials/Cellchat/cellchat_humanSkin_NL_analysed.rds")
+
+cellchat.LS <- readRDS(
+  "../Desktop/Video_Tutorials/Cellchat/cellchat_humanSkin_LS_analysed.rds")
+  
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Cell_Chat")
+
+files <- list.files(pattern = "_cellchat\\.rds$") # Ensure it only lists .rds files
+
+# Initialize an empty list to store cellchat objects
+cellchats <- list()
+
+for (i in files) {
+  # Extract the base name without the extension for use as the list key
+  name <- gsub("_cellchat\\.rds$", "", i)
+  
+  # Read the RDS file
+  cellchat <- readRDS(i)
+  cellchat<- subsetCellChat(cellchat, idents.use = c("Bcell","CD4T","CD8T","Endothelial","Epithelial","Fibroblast","Macrophage","Mast","Monocyte","Multi","Neutrophils","NK","panDC","PlasmaCell","Tumor"))
+  
+  # Store the cellchat object in the list under the derived name
+  cellchats[[name]] <- cellchat
+}
+
+HPV_Neg <- list(High = cellchats[[1]], Low = cellchats[[5]])
+cellchat <- mergeCellChat(HPV_Neg, add.names = names(HPV_Neg))
+```
+
+
+
+```{r}
+cellchat <- subsetCellChat(CopyOfFemale_cellchat, idents.use = c("Bcell","CD4T","CD8T","Endothelial","Epithelial","Fibroblast","Macrophage","Mast","Monocyte","Multi","Neutrophils","NK","panDC","PlasmaCell","Tumor"))
+row_names_hpv_negative <- rownames(cellchat@meta[cellchat@meta$HPV == "HPV-", ])
+Female_cellchat_neg <- subsetCellChat(cellchat, cells.use = row_names_hpv_negative, idents.use = c("Bcell","CD4T","CD8T","Endothelial","Epithelial","Fibroblast","Macrophage","Mast","Monocyte","Multi","Neutrophils","NK","panDC","PlasmaCell","Tumor"))
+list <- list(Female = Female_cellchat, Male = Male_cellchat)
+cellchat <- mergeCellChat(list, add.names = names(list))
+```
+
+```{r}
+# 1. Compare the overall information flow of each signaling pathway
+pdf(file= c("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Cell_Chat/MF/information_flow.pdf"))
+rankNet(cellchat, mode = "comparison", stacked = T, do.stat = TRUE, font.size = 5) # 42 & 47
+rankNet(cellchat, mode = "comparison", stacked = F, do.stat = TRUE, font.size = 5)
+dev.off()
+```
+
+```{r}
+# 2. Compare the total number of interactions and interaction strength
+pdf(file= c("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Cell_Chat/MF/interactions_malefirst.pdf"))
+compareInteractions(cellchat, show.legend = F, group = c(1,2), measure = "count")
+compareInteractions(cellchat, show.legend = F, group = c(1,2), measure = "weight")
+dev.off()
+```
+
+
+```{r}
+
+###### scatter plot 
+# 1.Compare outgoing/incoming interaction strength for all the cell types
+count.sum <- sapply(HPV_Neg, function(x) {rowSums(x@net$count) + 
+    colSums(x@net$count)-diag(x@net$count)})
+weight.MinMax <- c(min(count.sum), max(count.sum)) # control the dot size 
+gg <- list()
+for (i in 1:length(HPV_Neg)) {
+  gg[[i]] <- netAnalysis_signalingRole_scatter(HPV_Neg[[i]], 
+  title = names(HPV_Neg)[i], weight.MinMax = weight.MinMax)
+}
+
+patchwork::wrap_plots(plots = gg)
+```
+
+```{r}
+# 2. identify signalling changes associated with one cell group 
+netAnalysis_signalingChanges_scatter(cellchat, idents.use = "Endothelial")
+netAnalysis_signalingChanges_scatter(cellchat, idents.use = "Tumor", 
+                                     signaling.exclude = "MIF")
+```
+
+
+```{r}
+###### Circle plots
+# 1. show the number of interactions between any two cell populations 
+# compute the maximum number of cells and the maximum number of interactions 
+weight.max <- getMaxWeight(HPV_Neg, attribute = c("idents","count"))
+
+par(mfrow = c(2, 6), xpd=TRUE)
+
+for (i in 1:length(HPV_Neg)) {
+  mat <- HPV_Neg[[i]]@net$weight
+  mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[15, ] <- mat[15,]
+  netVisual_circle(mat2, weight.scale = T, label.edge= F,
+  edge.weight.max = weight.max[2], edge.width.max = 12, arrow.size = 0.1,
+  title.name = paste0("Weight of interactions - ", names(HPV_Neg)[i]))
+}
+```
+
+
+```{r}
+# 2. selected pathway
+weight.max <- getMaxWeight(HPV_Neg, slot.name = c("netP"), 
+                           attribute =c("CXCL"))
+
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(HPV_Neg)) {
+  netVisual_aggregate(HPV_Neg[[i]], signaling = c("CXCL"), layout = "circle",
+  edge.weight.max = weight.max[1], edge.width.max = 10, arrow.size = 0.05, 
+  signaling.name = paste("CXCL", names(HPV_Neg)[i]))
+}
+```
+
+```{r}
+# 3. Show differential number of interactions or interaction strength among 
+# different cell populations, red(increased signaling)/blue(decreased signaling)
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(cellchat, comparison = c(1, 2), measure = "count", 
+                          weight.scale = T, arrow.size = 0.1)
+netVisual_diffInteraction(cellchat, comparison = c(1, 2), measure = "weight", 
+                          weight.scale = T, arrow.size = 0.1)
+```
+
+
+```{r}
+# 4. simplify the complicated network to the cell type level
+group.cellType <- c(rep("FIB", 4), rep("DC", 4), rep("TC", 4))
+group.cellType <- factor(group.cellType, levels = c("FIB", "DC", "TC"))
+object.list <- lapply(object.list, function(x) {
+                              mergeInteractions(x, group.cellType)})
+cellchat <- mergeCellChat(object.list, add.names = names(object.list))
+
+weight.max <- getMaxWeight(object.list, slot.name = c("idents", "net", "net"), 
+                           attribute = c("idents", "count", "count.merged"))
+```
+
+
+
+
+
+# show the number of interactions or interaction strength.
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+     netVisual_circle(object.list[[i]]@net$count.merged, weight.scale = T, 
+     label.edge= T, edge.weight.max = weight.max[3], edge.width.max = 12, 
+     arrow.size = 0.1,
+     title.name = paste0("Number of interactions - ", names(object.list)[i]))
+}
+
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(cellchat, weight.scale = T, comparison = c(1, 2),
+            arrow.size = 0.1, measure = "count.merged", label.edge = T)
+netVisual_diffInteraction(cellchat, weight.scale = T, comparison = c(1, 2),
+            arrow.size = 0.1, measure = "weight.merged", label.edge = T)
+
+
+```{r}
+###### Heatmap
+# 1. Compare outgoing/incoming signaling associated with each cell population
+# combining all the identified signaling pathways from different datasets 
+all_pathways <- union(names(HPV_Neg[[1]]@netP$centr), 
+                       names(HPV_Neg[[2]]@netP$centr))
+
+ht1 = netAnalysis_signalingRole_heatmap(HPV_Neg[[1]], pattern = "all", 
+      signaling = all_pathways, title = names(HPV_Neg)[1],  
+      width = 5, height = 11, color.heatmap = "OrRd")
+ht2 = netAnalysis_signalingRole_heatmap(HPV_Neg[[2]], pattern = "all", 
+      signaling = all_pathways, title = names(HPV_Neg)[2], 
+      width = 5, height = 11, color.heatmap = "OrRd")
+draw(ht1 + ht2, ht_gap = unit(0.5, "cm"))
+```
+
+```{r}
+ht1 = netAnalysis_signalingRole_heatmap(HPV_Neg[[1]], pattern = "all", 
+      signaling = NULL, title = names(HPV_Neg)[1],
+      width = 5, height = 11, color.heatmap = "OrRd")
+ht1
+```
+
+          
+```{r}
+ht3 = netAnalysis_signalingRole_heatmap(HPV_Neg[[1]], pattern ="outgoing", 
+      signaling = "MHC_I", title = names(HPV_Neg)[1], 
+      width = 5, height = 11)
+ht4 = netAnalysis_signalingRole_heatmap(HPV_Neg[[2]], pattern ="outgoing", 
+      signaling = all_pathways, title = names(HPV_Neg)[2], 
+      width = 5, height = 11)
+draw(ht3 + ht4, ht_gap = unit(0.5, "cm"))
+```
+
+
+```{r}
+netAnalysis_signalingRole_heatmap <- function(object, signaling = NULL, pattern = c("outgoing", "incoming","all"), slot.name = "netP",
+                                              color.use = NULL, color.heatmap = "BuGn",
+                                              title = NULL, width = 10, height = 8, font.size = 8, font.size.title = 10, cluster.rows = FALSE, cluster.cols = FALSE){
+  
+  pattern <- match.arg(c("all"))
+  if (length(slot(object, slot.name)$centr) == 0) {
+    stop("Please run `netAnalysis_computeCentrality` to compute the network centrality scores! ")
+  }
+  centr <- slot(HPV_Neg$High,  "netP")$centr
+  outgoing <- matrix(0, nrow = nlevels(HPV_Neg$High@idents), ncol = length(centr))
+  incoming <- matrix(0, nrow = nlevels(HPV_Neg$High@idents), ncol = length(centr))
+  dimnames(outgoing) <- list(levels(HPV_Neg$High@idents), names(centr))
+  dimnames(incoming) <- dimnames(outgoing)
+  for (i in 1:length(centr)) {
+    outgoing[,i] <- centr[[i]]$outdeg
+    incoming[,i] <- centr[[i]]$indeg
+  }
+  if (pattern == "outgoing") {
+    mat <- t(outgoing)
+    legend.name <- "Outgoing"
+  } else if (pattern == "incoming") {
+    mat <- t(incoming)
+    legend.name <- "Incoming"
+  } else if (pattern == "all") {
+    mat <- t(outgoing+ incoming)
+    legend.name <- "Overall"
+  }
+  
+  if (is.null(title)) {
+    title <- paste0(legend.name, " signaling patterns")
+  } else {
+    title <- paste0(paste0(legend.name, " signaling patterns"), " - ",title)
+  }
+
+  if (!is.null(signaling)) {
+    mat1 <- mat[rownames(mat) %in% all_pathways, , drop = FALSE]
+    mat <- matrix(0, nrow = length(signaling), ncol = ncol(mat))
+    idx <- match(rownames(mat1), signaling)
+    mat[idx[!is.na(idx)], ] <- mat1
+    dimnames(mat) <- list(signaling, colnames(mat1))
+  }
+  mat.ori <- mat
+  mat <- sweep(mat, 1L, apply(mat, 1, max), '/', check.margin = FALSE)
+  mat[mat == 0] <- NA
+
+
+  if (is.null(color.use)) {
+    color.use <- scPalette(length(colnames(mat)))
+  }
+  color.heatmap.use = grDevices::colorRampPalette((RColorBrewer::brewer.pal(n = 9, name = "BuGn")))(100)
+
+  df<- data.frame(group = colnames(mat)); rownames(df) <- colnames(mat)
+  names(color.use) <- colnames(mat)
+  col_annotation <- HeatmapAnnotation(df = df, col = list(group = color.use),which = "column",
+                                      show_legend = FALSE, show_annotation_name = FALSE,
+                                      simple_anno_size = grid::unit(0.2, "cm"))
+  ha2 = HeatmapAnnotation(Strength = anno_barplot(colSums(mat.ori), border = FALSE,gp = gpar(fill = color.use, col=color.use)), show_annotation_name = FALSE)
+
+  pSum <- rowSums(mat.ori)
+  pSum.original <- pSum
+  pSum <- -1/log(pSum)
+  pSum[is.na(pSum)] <- 0
+  idx1 <- which(is.infinite(pSum) | pSum < 0)
+  if (length(idx1) > 0) {
+    values.assign <- seq(max(pSum)*1.1, max(pSum)*1.5, length.out = length(idx1))
+    position <- sort(pSum.original[idx1], index.return = TRUE)$ix
+    pSum[idx1] <- values.assign[match(1:length(idx1), position)]
+  }
+
+  ha1 = rowAnnotation(Strength = anno_barplot(pSum, border = FALSE), show_annotation_name = FALSE)
+
+  if (min(mat, na.rm = T) == max(mat, na.rm = T)) {
+    legend.break <- max(mat, na.rm = T)
+  } else {
+    legend.break <- c(round(min(mat, na.rm = T), digits = 1), round(max(mat, na.rm = T), digits = 1))
+  }
+  ht1 = Heatmap(mat, col = color.heatmap.use, na_col = "white", name = "Relative strength",
+                bottom_annotation = col_annotation, top_annotation = ha2, right_annotation = ha1,
+                cluster_rows = F,cluster_columns = F,
+                row_names_side = "left",row_names_rot = 0,row_names_gp = gpar(fontsize = 8),column_names_gp = gpar(fontsize = 8),
+                width = unit(10, "cm"), height = unit(7, "cm"),
+                column_title = title,column_title_gp = gpar(fontsize = 8),column_names_rot = 90,
+                heatmap_legend_param = list(title_gp = gpar(fontsize = 8, fontface = "plain"),title_position = "leftcenter-rot",
+                                            border = NA, at = legend.break,
+                                            legend_height = unit(20, "mm"),labels_gp = gpar(fontsize = 8),grid_width = unit(2, "mm"))
+  )
+  #  draw(ht1)
+  return(ht1)
+}
+
+ht1
+```
+
+```{r}
+ht5 = netAnalysis_signalingRole_heatmap(object.list[[1]], pattern = "incoming", 
+      signaling = all_pathways, title = names(object.list)[1], 
+      width = 5, height = 11, color.heatmap = "GnBu")
+ht6 = netAnalysis_signalingRole_heatmap(object.list[[2]], pattern ="incoming",
+      signaling = all_pathways, title = names(object.list)[2], 
+      width = 5, height = 11, color.heatmap = "GnBu")
+draw(ht5 + ht6, ht_gap = unit(0.5, "cm"))
+```
+
+```{r}
+# 2. selected pathways
+par(mfrow = c(1,2), xpd=TRUE)
+ht <- list()
+for (i in 1:length(object.list)) {
+  ht[[i]] <- netVisual_heatmap(object.list[[i]], signaling = c("CXCL"), 
+  title.name = paste("CXCL", "signaling ",names(object.list)[i]),
+  color.heatmap = "Reds")
+}
+ComplexHeatmap::draw(ht[[1]] + ht[[2]], ht_gap = unit(0.5, "cm"))
+
+```
+
+```{r}
+# 3. show differential interaction number & interaction strength using heatmap
+gg1 <- netVisual_heatmap(cellchat, comparison = c(1, 2), measure = "count")
+gg2 <- netVisual_heatmap(cellchat, comparison = c(1, 2), measure = "weight")
+gg1 + gg2
+```
+
+```{r}
+###### Bubble plots
+# 1. compare communication probabilities mediated by ligand-receptor pairs from 
+# selected sources and targets cell groups 
+netVisual_bubble(cellchat, sources.use = 4, targets.use = c(6:11),  
+                 comparison = c(1, 2), angle.x = 45)
+```
+
+
+
+
+
+```{r}
+netAnalysis_signalingRole_heatmap(cellchats[[1]], pattern = "outgoing", height = 11,font.size = 3.5)
+```
+
+
+
+
+# 2. identify the up-regulated ligand-receptor pairs 
+netVisual_bubble(cellchat, sources.use = 4, targets.use = c(6:11),  
+                 comparison = c(1, 2), max.dataset = 2, 
+                 title.name = "Increased signaling in LS", angle.x = 45, 
+                 remove.isolate = T)
+
+# 3. identify down-regulated ligand-receptor pairs 
+netVisual_bubble(cellchat, sources.use = 4, targets.use = c(6:11),  
+                 comparison = c(1, 2), max.dataset = 1, 
+                 title.name = "Decreased signaling in LS", angle.x = 45, 
+                 remove.isolate = T) 
+
+# Violin plot
+View(cellchat@meta)
+
+```{r}
+pdf(file= c("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Cell_Chat/MF/incoming_maleneg.pdf"))
+cellchat <- identifyCommunicationPatterns(cellchat,pattern = "incoming", 
+                                      k = nPatterns, width = 5, height = 9
+                                      , font.size = 3
+                                    )
+dev.off()
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Cell_Chat/MF")
+cellchat <- FemaleNeg_cellchat
+cellchat<- subsetCellChat(cellchat, idents.use = c("Bcell","CD4T","CD8T","Endothelial","Epithelial","Fibroblast","Macrophage","Mast","Monocyte","Multi","Neutrophils","NK","panDC","PlasmaCell","Tumor"))
+
+# 9. Compute the network centrality scores
+cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
+
+# 10. Identify and visualize outgoing communication pattern of secreting cells
+selectK(cellchat, pattern = "outgoing") 
+nPatterns = 2
+pdf()
+cellchat <- identifyCommunicationPatterns(cellchat, pattern = "outgoing",
+                                      k = nPatterns, width = 5, height = 9
+                                      , font.size = 3
+                                    )
+dev.off()
+
+# 11. Identify and visualize incoming communication pattern of target cells
+selectK(cellchat, pattern = "incoming")
+nPatterns = 3
+cellchat <- identifyCommunicationPatterns(cellchat,pattern = "incoming", 
+                                      k = nPatterns, width = 5, height = 9)
+
+# 12. Identify signaling groups based on functional similarity
+#cellchat <- computeNetSimilarity(cellchat, type = "functional")
+#cellchat <- netEmbedding(cellchat, type = "functional")
+#cellchat <- netClustering (cellchat, type = "functional", do.parallel = FALSE)
+
+# 13. Identify signaling groups based on structure similarity
+#cellchat <- computeNetSimilarity(cellchat, type = "structural")
+#cellchat <- netEmbedding(cellchat, type = "structural")
+#cellchat <- netClustering(cellchat, type = "structural", do.parallel = FALSE)
+
+# 14. Save NL cellchat object
+saveRDS(cellchat, 
+  file="Male_cellchat.rds")
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Cell_Chat/MF")
+cellchat <- MaleNeg_cellchat
+cellchat<- subsetCellChat(cellchat, idents.use = c("Bcell","CD4T","CD8T","Endothelial","Epithelial","Fibroblast","Macrophage","Mast","Monocyte","Multi","Neutrophils","NK","panDC","PlasmaCell","Tumor"))
+
+# 9. Compute the network centrality scores
+cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
+
+# 10. Identify and visualize outgoing communication pattern of secreting cells
+selectK(cellchat, pattern = "outgoing") 
+nPatterns = 2 
+cellchat <- identifyCommunicationPatterns(cellchat, pattern = "outgoing",
+                                      k = nPatterns, width = 5, height = 9)
+
+# 11. Identify and visualize incoming communication pattern of target cells
+selectK(cellchat, pattern = "incoming")
+nPatterns = 3
+cellchat <- identifyCommunicationPatterns(cellchat,pattern = "incoming", 
+                                      k = nPatterns, width = 5, height = 9)
+
+# 12. Identify signaling groups based on functional similarity
+#cellchat <- computeNetSimilarity(cellchat, type = "functional")
+#cellchat <- netEmbedding(cellchat, type = "functional")
+#cellchat <- netClustering (cellchat, type = "functional", do.parallel = FALSE)
+
+# 13. Identify signaling groups based on structure similarity
+#cellchat <- computeNetSimilarity(cellchat, type = "structural")
+#cellchat <- netEmbedding(cellchat, type = "structural")
+#cellchat <- netClustering(cellchat, type = "structural", do.parallel = FALSE)
+
+# 14. Save NL cellchat object
+saveRDS(cellchat, 
+  file="Male_cellchat.rds")
+```
+
+```{r}
+FemaleNeg_cellchat <- subsetCellChat(FemaleNeg_cellchat, idents.use = c("Bcell","CD4T","CD8T","Endothelial","Epithelial","Fibroblast","Macrophage","Mast","Monocyte","Multi","Neutrophils","NK","panDC","PlasmaCell","Tumor"))
+MaleNeg_cellchat <- subsetCellChat(MaleNeg_cellchat, idents.use = c("Bcell","CD4T","CD8T","Endothelial","Epithelial","Fibroblast","Macrophage","Mast","Monocyte","Multi","Neutrophils","NK","panDC","PlasmaCell","Tumor"))
+list <- list(Female = FemaleNeg_cellchat, Male = MaleNeg_cellchat)
+cellchat <- mergeCellChat(list, add.names = names(list))
+```
+
+```{r}
+
+###### scatter plot 
+# 1.Compare outgoing/incoming interaction strength for all the cell types
+count.sum <- sapply(list, function(x) {rowSums(x@net$count) + 
+    colSums(x@net$count)-diag(x@net$count)})
+weight.MinMax <- c(min(count.sum), max(count.sum)) # control the dot size 
+gg <- list()
+for (i in 1:length(list)) {
+  gg[[i]] <- netAnalysis_signalingRole_scatter(list[[i]], 
+  title = names(list)[i], weight.MinMax = weight.MinMax)
+}
+
+patchwork::wrap_plots(plots = gg)
+```
+
+```{r}
+# 2. identify signalling changes associated with one cell group 
+netAnalysis_signalingChanges_scatter(cellchat, idents.use = "Endothelial")
+netAnalysis_signalingChanges_scatter(cellchat, idents.use = "Tumor", 
+                                     signaling.exclude = "MIF")
+```
+
+
+```{r}
+###### Circle plots
+# 1. show the number of interactions between any two cell populations 
+# compute the maximum number of cells and the maximum number of interactions 
+weight.max <- getMaxWeight(list, attribute = c("idents","count"))
+
+par(mfrow = c(1, 2), xpd=TRUE)
+
+for (i in 1:length(list)) {
+  mat <- list[[i]]@net$weight
+  mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[15, ] <- mat[15,]
+  netVisual_circle(mat2, weight.scale = T, label.edge= F,
+  edge.weight.max = weight.max[2], edge.width.max = 12, arrow.size = 0.1,
+  title.name = paste0("Weight of interactions - ", names(list)[i]))
+}
+```
+
+
+```{r}
+# 2. selected pathway
+weight.max <- getMaxWeight(HPV_Neg, slot.name = c("netP"), 
+                           attribute =c("CXCL"))
+
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(HPV_Neg)) {
+  netVisual_aggregate(HPV_Neg[[i]], signaling = c("CXCL"), layout = "circle",
+  edge.weight.max = weight.max[1], edge.width.max = 10, arrow.size = 0.05, 
+  signaling.name = paste("CXCL", names(HPV_Neg)[i]))
+}
+```
+
+```{r}
+# 3. Show differential number of interactions or interaction strength among 
+# different cell populations, red(increased signaling)/blue(decreased signaling)
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(cellchat, comparison = c(1, 2), measure = "count", 
+                          weight.scale = T, arrow.size = 0.1)
+netVisual_diffInteraction(cellchat, comparison = c(1, 2), measure = "weight", 
+                          weight.scale = T, arrow.size = 0.1)
+```
+```{r}
+gg1 <- netVisual_heatmap(cellchat)
+#> Do heatmap based on a merged object
+gg2 <- netVisual_heatmap(cellchat, measure = "weight")
+#> Do heatmap based on a merged object
+gg1 + gg2
+```
+```{r}
+weight.max <- getMaxWeight(list, attribute = c("idents","count"))
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(list)) {
+  netVisual_circle(list[[i]]@net$count, weight.scale = T, label.edge= F, edge.weight.max = weight.max[2], edge.width.max = 12, title.name = paste0("Number of interactions - ", names(list)[i]))
+}
+```
+```{r}
+gg1 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "Epithelial")
+#> Visualizing differential outgoing and incoming signaling changes from NL to LS
+#> The following `from` values were not present in `x`: 0
+#> The following `from` values were not present in `x`: 0, -1
+gg2 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "Endothelial")
+#> Visualizing differential outgoing and incoming signaling changes from NL to LS
+#> The following `from` values were not present in `x`: 0, 2
+#> The following `from` values were not present in `x`: 0, -1
+gg3 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "Fibroblast")
+patchwork::wrap_plots(plots = list(gg1,gg2,gg3))
+```
+```{r}
+object = cellchat
+idents.use = object@idents$joint
+color.use = c("grey10", "#F8766D", "#00BFC4")
+comparison = c(1,2)
+signaling = NULL
+signaling.label = NULL
+top.label = 1 
+signaling.exclude = NULL
+xlims = NULL
+ylims = NULL
+slot.name = "netP"
+dot.size = 2.5
+point.shape = c(21, 22, 24, 23)
+label.size = 3
+dot.alpha = 0.6
+x.measure = "outdeg"
+y.measure = "indeg"
+xlabel = "Differential outgoing interaction strength"
+ylabel = "Differential incoming interaction strength"
+title = NULL
+font.size = 10
+font.size.title = 10
+do.label = T
+show.legend = T
+show.axes = T
+netAnalysis_signalingChanges_scatter <- function(object, idents.use, color.use = c("grey10", "#F8766D", "#00BFC4"), comparison = c(1,2), signaling = NULL, signaling.label = NULL, top.label = 1, signaling.exclude = NULL, xlims = NULL, ylims = NULL,slot.name = "netP", dot.size = 2.5, point.shape = c(21, 22, 24, 23), label.size = 3, dot.alpha = 0.6,
+                                                 x.measure = "outdeg", y.measure = "indeg", xlabel = "Differential outgoing interaction strength", ylabel = "Differential incoming interaction strength", title = NULL,
+                                                 font.size = 10, font.size.title = 10, do.label = T, show.legend = T, show.axes = T) {
+  if (is.list(object)) {
+    object <- mergeCellChat(object, add.names = names(object))
+  }
+  if (is.list(object@net[[1]])) {
+    dataset.name <- names(object@net)
+    message(paste0("Visualizing differential outgoing and incoming signaling changes from ", dataset.name[comparison[1]], " to ", dataset.name[comparison[2]]))
+    title <- paste0("Signaling changes of ", idents.use, " (", dataset.name[comparison[1]], " vs. ", dataset.name[comparison[2]], ")")
+
+    cell.levels <- levels(object@idents$joint)
+    if (is.null(xlabel) | is.null(ylabel)) {
+      xlabel = "Differential outgoing interaction strength"
+      ylabel = "Differential incoming interaction strength"
+    }
+
+  } else {
+    message("Visualizing outgoing and incoming signaling on a single object \n")
+    title <- paste0("Signaling patterns of ", idents.use)
+    if (length(slot(object, slot.name)$centr) == 0) {
+      stop("Please run `netAnalysis_computeCentrality` to compute the network centrality scores! ")
+    }
+    cell.levels <- levels(object@idents)
+  }
+  if (!(idents.use %in% cell.levels)) {
+    stop("Please check the input cell group names!")
+  }
+  if (is.null(signaling)) {
+    signaling <- union(object@netP[[comparison[1]]]$pathways, object@netP[[comparison[2]]]$pathways)
+  }
+  if (!is.null(signaling.exclude)) {
+    signaling <- setdiff(signaling, signaling.exclude)
+  }
+  mat.all.merged <- list()
+  for (ii in 1:length(comparison)) {
+    if (length(slot(object, slot.name)[[comparison[ii]]]$centr) == 0) {
+      stop("Please run `netAnalysis_computeCentrality` to compute the network centrality scores for each dataset seperately! ")
+    }
+    if (sum(c(x.measure, y.measure) %in% names(slot(object, slot.name)[[comparison[ii]]]$centr[[1]])) !=2) {
+      stop(paste0("`x.measure, y.measure` should be one of ", paste(names(slot(object, slot.name)[[comparison[ii]]]$centr[[1]]),collapse=", "), '\n', "`outdeg_unweighted` is only supported for version >= 1.1.2"))
+    }
+    centr <- slot(object, slot.name)[[comparison[ii]]]$centr
+    outgoing <- matrix(0, nrow = length(cell.levels), ncol = length(centr))
+    incoming <- matrix(0, nrow = length(cell.levels), ncol = length(centr))
+    dimnames(outgoing) <- list(cell.levels, names(centr))
+    dimnames(incoming) <- dimnames(outgoing)
+    for (i in 1:length(centr)) {
+      outgoing[,i] <- centr[[i]][[x.measure]]
+      incoming[,i] <- centr[[i]][[y.measure]]
+    }
+    mat.out <- t(outgoing)
+    mat.in <- t(incoming)
+
+    mat.all <- array(0, dim = c(length(signaling),ncol(mat.out),2))
+    mat.t <-list(mat.out, mat.in)
+    for (i in 1:length(comparison)) {
+      mat = mat.t[[i]]
+      mat1 <- mat[rownames(mat) %in% signaling, , drop = FALSE]
+      mat <- matrix(0, nrow = length(signaling), ncol = ncol(mat))
+      idx <- match(rownames(mat1), signaling)
+      mat[idx[!is.na(idx)], ] <- mat1
+      dimnames(mat) <- list(signaling, colnames(mat1))
+      mat.all[,,i] = mat
+    }
+    dimnames(mat.all) <- list(dimnames(mat)[[1]], dimnames(mat)[[2]], c("outgoing", "incoming"))
+    mat.all.merged[[ii]] <- mat.all
+  }
+  mat.all.merged.use <- list(mat.all.merged[[1]][,idents.use,], mat.all.merged[[2]][,idents.use,])
+  idx.specific <- mat.all.merged.use[[1]] * mat.all.merged.use[[2]]
+  mat.sum <- mat.all.merged.use[[2]] +  mat.all.merged.use[[1]]
+  out.specific.signaling <- rownames(idx.specific)[(mat.sum[,1] != 0) & (idx.specific[,1] == 0)]
+  in.specific.signaling <- rownames(idx.specific)[(mat.sum[,2] != 0) & (idx.specific[,2] == 0)]
+
+  mat.diff <- mat.all.merged.use[[2]] -  mat.all.merged.use[[1]]
+  idx <- rowSums(mat.diff) != 0
+  mat.diff <- mat.diff[idx, ]
+  out.specific.signaling <- rownames(mat.diff) %in% out.specific.signaling
+  in.specific.signaling <- rownames(mat.diff) %in% in.specific.signaling
+  out.in.specific.signaling <- as.logical(out.specific.signaling * in.specific.signaling)
+  specificity.out.in <- matrix(0, nrow = nrow(mat.diff), ncol = 1)
+  specificity.out.in[out.in.specific.signaling] <- 2 # both outgoing and incoming specific to one condition
+  specificity.out.in[setdiff(which(out.specific.signaling), which(out.in.specific.signaling))] <- 1 # only outgoing specific to one condition
+  specificity.out.in[setdiff(which(in.specific.signaling), which(out.in.specific.signaling))] <- -1 # only incoming specific to one condition
+
+
+  df <- as.data.frame(mat.diff)
+  df$specificity.out.in <- specificity.out.in
+  df$specificity = 0
+  df$specificity[(specificity.out.in != 0) & (rowSums(mat.diff >= 0) ==2)] = 1 # specific to dataset 2
+  df$specificity[(specificity.out.in != 0) & (rowSums(mat.diff <= 0) ==2)] = -1  # specific to dataset 1
+
+  # change number to char
+  out.in.category <- c("Shared", "Incoming specific", "Outgoing specific", "Incoming & Outgoing specific")
+  specificity.category <- c("Shared", paste0(dataset.name[comparison[1]]," specific"), paste0(dataset.name[comparison[2]]," specific"))
+  df$specificity.out.in <- plyr::mapvalues(df$specificity.out.in, from = c(0,-1,1,2),to = out.in.category)
+  df$specificity.out.in <- factor(df$specificity.out.in, levels = out.in.category)
+  df$specificity <- plyr::mapvalues(df$specificity, from = c(0,-1,1),to = specificity.category)
+  df$specificity <- factor(df$specificity, levels = specificity.category)
+
+  point.shape.use <- point.shape[out.in.category %in% unique(df$specificity.out.in)]
+  df$specificity.out.in = droplevels(df$specificity.out.in, exclude = setdiff(out.in.category,unique(df$specificity.out.in)))
+
+  color.use <- color.use[specificity.category %in% unique(df$specificity)]
+  df$specificity = droplevels(df$specificity, exclude = setdiff(specificity.category,unique(df$specificity)))
+
+  df$labels <- rownames(df)
+  gg <- ggplot(data = df, aes(outgoing, incoming)) +
+    geom_point(aes(colour = specificity, fill = specificity, shape = specificity.out.in), size = dot.size)
+  gg <- gg + theme_linedraw() +theme(panel.grid = element_blank()) +
+    geom_hline(yintercept=0,linetype="dashed", color = "grey50", size = 0.25) + geom_vline(xintercept=0, linetype="dashed", color = "grey50",size = 0.25) +
+    theme(text = element_text(size = font.size), legend.key.height = grid::unit(0.15, "in"))+
+    # guides(colour = guide_legend(override.aes = list(size = 3)))+
+    labs(title = title, x = xlabel, y = ylabel) + theme(plot.title = element_text(size= font.size.title, hjust = 0.5, face="plain"))+
+    # theme(axis.text.x = element_blank(),axis.text.y = element_blank(),axis.ticks = element_blank()) +
+    theme(axis.line.x = element_line(size = 0.25), axis.line.y = element_line(size = 0.25))
+  gg <- gg + scale_fill_manual(values = ggplot2::alpha(color.use, alpha = dot.alpha), drop = FALSE) + guides(fill="none")
+  gg <- gg + scale_colour_manual(values = color.use, drop = FALSE)
+  gg <- gg + scale_shape_manual(values = point.shape.use)
+  gg <- gg + theme(legend.title = element_blank())
+  if (!is.null(xlims)) {
+    gg <- gg + xlim(xlims)
+  }
+  if (!is.null(ylims)) {
+    gg <- gg + ylim(ylims)
+  }
+
+  if (do.label) {
+    if (is.null(signaling.label)) {
+      thresh <- stats::quantile(abs(as.matrix(df[,1:2])), probs = 1-top.label)
+      idx = abs(df[,1]) > thresh | abs(df[,2]) > thresh
+      data.label <- df[idx,]
+    } else {
+      data.label <- df[rownames(df) %in% signaling.label, ]
+    }
+
+    gg <- gg + ggrepel::geom_text_repel(data = data.label, mapping = aes(label = labels, colour = specificity), size = label.size, show.legend = F,segment.size = 0.2, segment.alpha = 0.5)
+  }
+  if (!show.legend) {
+    gg <- gg + theme(legend.position = "none")
+  }
+
+  if (!show.axes) {
+    gg <- gg + theme_void()
+  }
+
+  gg
+
+}
+```
+
+
+```{r}
+# define a positive dataset, i.e., the dataset with positive fold change against the other dataset
+pos.dataset = "Female"
+# define a char name used for storing the results of differential expression analysis
+features.name = paste0(pos.dataset, ".merged")
+
+# perform differential expression analysis 
+# Of note, compared to CellChat version < v2, CellChat v2 now performs an ultra-fast Wilcoxon test using the presto package, which gives smaller values of logFC. Thus we here set a smaller value of thresh.fc compared to the original one (thresh.fc = 0.1). Users can also provide a vector and dataframe of customized DEGs by modifying the cellchat@var.features$LS.merged and cellchat@var.features$LS.merged.info. 
+
+cellchat <- identifyOverExpressedGenes(cellchat, group.dataset = "datasets", pos.dataset = pos.dataset, features.name = features.name, only.pos = FALSE, thresh.pc = 0.1, thresh.fc = 0.05,thresh.p = 0.05, group.DE.combined = FALSE) 
+#> Use the joint cell labels from the merged CellChat object
+
+# map the results of differential expression analysis onto the inferred cell-cell communications to easily manage/subset the ligand-receptor pairs of interest
+net <- netMappingDEG(cellchat, features.name = features.name, variable.all = TRUE)
+# extract the ligand-receptor pairs with upregulated ligands in LS
+net.up <- subsetCommunication(cellchat,sources.use = 6, targets.use = c(1:15), net = net, datasets = "Female",ligand.logFC = 0.05, receptor.logFC = NULL)
+# extract the ligand-receptor pairs with upregulated ligands and upregulated receptors in NL, i.e.,downregulated in LS
+net.down <- subsetCommunication(cellchat, sources.use = 6, targets.use = c(1:15), net = net, datasets = "Male",ligand.logFC = -0.05, receptor.logFC = NULL)
+```
+
+```{r}
+gene.up <- extractGeneSubsetFromPair(net.up, cellchat)
+gene.down <- extractGeneSubsetFromPair(net.down, cellchat)
+```
+
+```{r}
+pairLR.use.up = net.up[, "interaction_name", drop = F]
+gg1 <- netVisual_bubble(cellchat, pairLR.use = pairLR.use.up, sources.use = 6, targets.use = c(1:15), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Up-regulated signaling in ", names(list)[2]))
+#> Comparing communications on a merged object
+pairLR.use.down = net.down[, "interaction_name", drop = F]
+gg2 <- netVisual_bubble(cellchat, pairLR.use = pairLR.use.down, sources.use = 6, targets.use = c(1:15), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Down-regulated signaling in ", names(list)[2]))
+#> Comparing communications on a merged object
+gg1 + gg2
+```
+

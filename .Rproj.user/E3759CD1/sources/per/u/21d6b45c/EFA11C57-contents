@@ -1,0 +1,307 @@
+#############################################
+# atlas_pipeline.R
+# Integration of Single-cell RNA-Seq Datasets using Seurat
+#
+# Datasets included: 
+#   - Kurten (GSE164690)
+#   - Bill (MGH_HNSCC)
+#   - Choi (converted from h5ad)
+#   - Puram (OPSCC)
+#
+# This script loads each dataset, performs basic QC/preprocessing,
+# merges/integrates the datasets, and then runs downstream analysis.
+#############################################
+
+# ------------------------------
+# 0. Load Required Libraries
+# ------------------------------
+library(Seurat)
+library(SeuratDisk)
+library(SeuratWrappers)
+library(UCell)
+library(patchwork)
+library(harmony)
+library(rliger)
+library(reshape2)
+library(RColorBrewer)
+library(dplyr)
+library(plyr)
+library(tidyr)
+library(stringr)
+library(readr)
+# (Add additional libraries if needed, e.g., scGate, STACAS, etc.)
+
+# ------------------------------
+# 1. Load the Kurten Dataset
+# ------------------------------
+
+# Base directory where raw data is stored
+kurten_base_path <- "~/Single_Cell_Analysis/GSE164690_RAW"
+kurten_dirs <- list.dirs(path = kurten_base_path, recursive = FALSE, full.names = FALSE)
+print(kurten_dirs)
+
+# Helper function to extract a sample name (e.g., "GSM5017021_HN01_PBL" -> "HN01_PBL")
+extract_sample_name <- function(dir_name) {
+  gsub("^[^_]*_", "", dir_name)
+}
+
+# Loop over directories and load data into a list
+kurten_samples <- list()
+for (dir in kurten_dirs) {
+  sample_name <- extract_sample_name(dir)
+  sample_path <- file.path(kurten_base_path, dir)
+  
+  # Define file paths
+  mtx_file <- file.path(sample_path, "matrix.mtx.gz")
+  features_file <- file.path(sample_path, "features.tsv.gz")
+  cells_file <- file.path(sample_path, "barcodes.tsv.gz")
+  
+  if (!all(file.exists(c(mtx_file, features_file, cells_file)))) {
+    warning(paste("Some files are missing for", dir, "; skipping this sample"))
+    next
+  }
+  
+  # Create Seurat object
+  counts <- ReadMtx(mtx = mtx_file, features = features_file, cells = cells_file)
+  seurat_obj <- CreateSeuratObject(counts = counts, project = "Kurten")
+  kurten_samples[[sample_name]] <- seurat_obj
+}
+
+# Option: Merge all Kurten samples into one object.
+merged_kurten <- merge(x = kurten_samples[[1]], 
+                       y = kurten_samples[-1], 
+                       add.cell.ids = names(kurten_samples), 
+                       project = "HNSC_Kurten")
+print(merged_kurten)
+
+# ------------------------------
+# 2. Process Clinical Data & Metadata (Kurten)
+# ------------------------------
+
+# Create a new metadata column that retains sample code information
+merged_kurten$sample_code <- sub("^(([^_]*_){1}[^_]*).*", "\\1", colnames(merged_kurten))
+# Separate the cell names into Patient, Type, and Barcode columns
+merged_kurten@meta.data <- merged_kurten@meta.data %>% 
+  tibble::rownames_to_column("sample") %>%
+  separate(sample, into = c("Patient", "Type", "Barcode"), sep = "_")
+
+# Define clinical data for each patient (adjust the vectors as needed)
+clinical_data <- data.frame(
+  Sex = c("male", "female", "male", "male", "female", "male", "male", "female", 
+          "female", "male", "male", "male", "male", "male", "female", "male", "male", "male"),
+  Age = as.factor(c("70-79","60-69","80-89", "50-59", "50-59", "30-39", "60-69", "70-79",
+                    "70-79","50-59","80-89", "50-59","70-79","50-59", "60-69", "40-49", "50-59", "50-59")),
+  Smoking = c("Yes", "No", "No", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes", "No", 
+              "No", "Yes", "No", "Yes", "Yes", "Yes", "Yes", "Yes"),
+  Alcohol = c("No", "No", "No", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes", 
+              "No", "Yes", "No", "Yes", NA, "Yes", "Yes", "Yes"),
+  Disease_site = c("Oral cavity", "Oral cavity", "Oral cavity", "Oral cavity", "Oral cavity", "Oral cavity", 
+                   "Larynx", "Oral cavity", "Oral cavity", "Oral cavity", "Oral cavity", "Oropharynx",
+                   "Oropharynx", "Oropharynx", "Oral cavity", "Oropharynx", "Oropharynx", "Oropharynx"),
+  HPV16 = c("Neg", "Neg", "Neg", "Neg", "Neg", "Neg", "Neg", "Neg", "Neg", "Neg", 
+            "Neg", "Pos", "Pos", "Pos", "Neg", "Pos", "Pos", "Pos"),
+  Inflamation_status = c("High", "Low", NA, "Low", "Med", "High", "Low", "Med", "Med", "High", 
+                         "Low", "Med", "High", "High", "Low", "Med", "High", "Low")
+)
+# Assume the row names are the patient IDs from the metadata (adjust as needed)
+patients <- unique(merged_kurten@meta.data$Patient)
+rownames(clinical_data) <- patients
+
+# Save clinical data for public reference
+write_csv(clinical_data, "SC_HNSCC_clinical_data.csv")
+
+# ------------------------------
+# 3. Load and Process Other Datasets
+# ------------------------------
+
+### 3A. Bill Dataset ###
+bill_base_path <- "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/Bill/GSE234933_MGH_HNSCC_gex_raw_counts"
+bill_files <- list.files(bill_base_path)
+bill_samples <- list()
+
+for (file in bill_files) {
+  sample_name <- sub("\\_.*", "", file)
+  file_path <- file.path(bill_base_path, file)
+  counts <- readRDS(file_path)
+  bill_samples[[sample_name]] <- CreateSeuratObject(counts = counts, project = "Bill")
+}
+merged_bill <- merge(x = bill_samples[[1]], 
+                     y = bill_samples[-1], 
+                     add.cell.ids = names(bill_samples), 
+                     project = "HNSC_Bill")
+
+# Process Bill metadata (read sample and cell annotations)
+MGH_sample_annotation <- read.delim("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/Bill/MGH_HNSCC_sample_annotation.txt")
+MGH_cell_annotation <- read.delim("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/Bill/MGH_HNSCC_cell_annotation.txt")
+
+# Merge the annotations into a single data frame (using a simple loop)
+bill_metadata <- MGH_cell_annotation
+bill_metadata$Sex <- NA
+bill_metadata$HPV <- NA
+for (a in seq_len(nrow(MGH_sample_annotation))) {
+  match_idx <- which(bill_metadata$sample == MGH_sample_annotation$Sample[a])
+  if (length(match_idx) > 0) {
+    bill_metadata$Sex[match_idx] <- MGH_sample_annotation$Sex[a]
+    bill_metadata$HPV[match_idx] <- MGH_sample_annotation$HPV.Status[a]
+  }
+}
+rownames(bill_metadata) <- bill_metadata$sample_barcode
+
+# Rename cells to remove the prefix for consistency
+new_names <- gsub("^[^_]*_", "", colnames(merged_bill))
+merged_bill <- RenameCells(merged_bill, new.names = new_names)
+merged_bill@meta.data$sample_barcode <- colnames(merged_bill)
+
+# Subset the Bill object to include only cells with matching metadata
+Bill <- subset(merged_bill, cells = bill_metadata$sample_barcode)
+
+
+### 3B. Choi Dataset ###
+# For Choi we assume that conversion from h5ad has been done using SeuratDisk.
+# Uncomment and run the following if starting from AnnData:
+# Convert("choi_sce_data.h5ad", dest = "h5seurat", overwrite = TRUE)
+# seurat_choi <- LoadH5Seurat("choi_sce_data.h5seurat")
+# For demonstration, we assume the converted object is called 'Choi'
+# (Adjust further processing as needed.)
+
+### 3C. Puram Dataset ###
+puram_counts <- ReadMtx(mtx = "OPSCC.mtx", 
+                        features = "GSE182227_genes.tsv", 
+                        cells = "GSE182227_barcodes.tsv", 
+                        feature.column = 1)
+puram_obj <- CreateSeuratObject(counts = puram_counts, project = "Puram")
+
+# Load Puram metadata (update the file path and parameters as needed)
+puram_metadata <- read.table("GSE182227_metadata.txt", header = TRUE, sep = "\t")
+rownames(puram_metadata) <- puram_metadata$Cell_barcode
+puram_obj <- AddMetaData(object = puram_obj, metadata = puram_metadata)
+
+# For example, assign Sex based on the Patient field:
+puram_obj$Sex <- factor(sapply(puram_obj$Patient, function(x) {
+  if (x %in% c("OP4", "OP5", "OP8", "OP9", "OP10", "OP12", "OP13", "OP14", "OP16", "OP17", "OP20", "OP33", "OP34", "OP35"))
+    "Male"
+  else if (x == "OP6")
+    "Female"
+  else
+    "UNKNOWN"
+}))
+
+# Preprocess Puram: normalization, variable features, PCA, UMAP, clustering.
+puram_obj <- NormalizeData(puram_obj)
+puram_obj <- FindVariableFeatures(puram_obj, selection.method = "vst", nfeatures = 2000)
+puram_obj <- ScaleData(puram_obj, verbose = FALSE)
+puram_obj <- RunPCA(puram_obj, features = VariableFeatures(object = puram_obj))
+puram_obj <- RunUMAP(puram_obj, reduction = "pca", dims = 1:20)
+puram_obj <- FindNeighbors(puram_obj, reduction = "pca", dims = 1:20)
+puram_obj <- FindClusters(puram_obj, resolution = 0.5)
+saveRDS(puram_obj, "puram_obj.rds")
+
+
+# ------------------------------
+# 4. Merge Datasets
+# ------------------------------
+
+# Read in or use previously processed objects.
+# (For example, assume that Puram, Kurten, and Choi have been saved.)
+Puram <- readRDS("path/to/Puram.rds")
+Kurten <- readRDS("path/to/Kurten.rds")
+Choi   <- readRDS("path/to/Choi.rds")
+Bill <- readRDS("path/to/Bill.rds")
+
+# Merge all datasets into one integrated object.
+HNSC_combined <- merge(Kurten, y = c(Bill, Puram, Choi), 
+                       add.cell.ids = c("Kurten", "Bill", "Puram", "Choi"), 
+                       project = "HNSC_All")
+
+# Add a dataset identifier (e.g., extracted from cell names)
+HNSC_combined@meta.data$Dataset <- sub("\\_.*", "", rownames(HNSC_combined@meta.data))
+
+
+# ------------------------------
+# 5. Standard Analysis on the Integrated Object
+# ------------------------------
+HNSC_combined <- NormalizeData(HNSC_combined)
+HNSC_combined <- FindVariableFeatures(HNSC_combined)
+HNSC_combined <- ScaleData(HNSC_combined)
+HNSC_combined <- RunPCA(HNSC_combined)
+HNSC_combined <- FindNeighbors(HNSC_combined, dims = 1:30)
+HNSC_combined <- FindClusters(HNSC_combined, resolution = 2, cluster.name = "unintegrated_clusters")
+HNSC_combined <- RunUMAP(HNSC_combined, dims = 1:30, reduction = "pca", reduction.name = "umap.unintegrated")
+
+# Plot UMAP by Dataset and clusters.
+DimPlot(HNSC_combined, reduction = "umap.unintegrated", group.by = c("Dataset", "seurat_clusters"))
+
+# Optionally, clean the object by subsetting for specific sample types and patient sex.
+HNSC_combined$HPV <- revalue(HNSC_combined$HPV, c("Negative"="HPV-", "Positive"="HPV+"))
+HNSC_combined <- subset(HNSC_combined, subset = Source %in% c("CD45p", "CD45n", "Primary", "CA", "Unknown primary of the head and neck"))
+HNSC_combined <- subset(HNSC_combined, subset = Sex == "Male")
+
+# Rename cell types for consistency.
+HNSC_combined@meta.data$Cells <- revalue(HNSC_combined@meta.data$Cell_Type, c(
+  "NK-cell" = "NK Cells", 
+  "T-cell" = "T Cells", 
+  "T.cells" = "T Cells", 
+  "T_cells" = "T Cells",
+  "B-Cells" = "B Cells", 
+  "B-cell" = "B Cells", 
+  "B_cells" = "B Cells", 
+  "Macrophage" = "Macrophages",
+  "Epithelial" = "Epithelial Cells", 
+  "NormalEpith" = "Epithelial Cells", 
+  "Mast.cells" = "Mast Cells", 
+  "Mast cell" = "Mast Cells",
+  "Endothelial" = "Endothelial Cells", 
+  "Endothelial_cells" = "Endothelial Cells", 
+  "Endothelial.cells" = "Endothelial Cells",
+  "Fibroblast" = "Fibroblasts", 
+  "Dendritic_cells" = "Denditric Cells", 
+  "Dendritic.cells" = "Denditric Cells", 
+  "Malignant.cells" = "Tumor",
+  "Epithelial.cells" = "Epithelial Cells", 
+  "Mast_cells" = "Mast Cells", 
+  "B_Plasma.cells" = "Plasma cell", 
+  "27" = "Unknown"
+))
+
+
+# ------------------------------
+# 6. Advanced Integration (e.g., using STACAS and scGate)
+# ------------------------------
+
+# Example with STACAS:
+nfeatures <- 1000  # Number of anchor features
+npcs <- 20         # Number of principal components
+HNSC_combined <- UpdateSeuratObject(HNSC_combined) %>% NormalizeData()
+
+# Split the object by dataset for STACAS integration.
+combined_list <- SplitObject(HNSC_combined, split.by = "Dataset")
+HNSC_combined_stacas <- Run.STACAS(combined_list, 
+                                   anchor.features = nfeatures, 
+                                   dims = 1:npcs, 
+                                   cell.labels = "Cells")
+HNSC_combined_stacas <- RunUMAP(HNSC_combined_stacas, dims = 1:npcs)
+saveRDS(HNSC_combined_stacas, "HNSC_combined_stacas.rds")
+
+# Example: Apply scGate to annotate cells based on TME models.
+models.DB <- scGate::get_scGateDB()
+models.list <- models.DB$human$TME_HiRes
+HNSC_combined_stacas <- scGate(HNSC_combined_stacas, model = models.list, ncores = 4)
+saveRDS(HNSC_combined_stacas, "HNSC_combined_stacas_scGate.rds")
+
+# Add a final annotation column for tumor vs. non-tumor cells.
+HNSC_combined_stacas@meta.data <- HNSC_combined_stacas@meta.data %>%
+  mutate(Cells_Tumor_Integration = if_else(Tumor.y == "Tumor", "Tumor", scGate_multi))
+
+
+# ------------------------------
+# 7. (Optional) Split Object by Sex
+# ------------------------------
+sex_list <- list(
+  Male = subset(HNSC_combined, subset = Sex == "Male"),
+  Female = subset(HNSC_combined, subset = Sex == "Female")
+)
+saveRDS(sex_list, "MF_list.rds")
+
+#############################################
+# End of atlas_pipeline.R
+#############################################

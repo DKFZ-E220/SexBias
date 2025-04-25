@@ -1,0 +1,1377 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-04-04"
+---
+
+```{r}
+library(Seurat)
+library(SeuratDisk)
+library(SeuratWrappers)
+library(UCell)
+
+library(patchwork)
+library(harmony)
+library(rliger)
+library(reshape2)
+library(RColorBrewer)
+library(dplyr)
+library(stringr) 
+library(plyr)
+
+library(GSVA)
+library(GSEABase)
+library(GSVAdata)
+library(ggplot2)
+
+library(ProjecTILs)
+library(STACAS)
+library(ggplot2)
+library(SignatuR)
+library(UCell)
+```
+
+```{r}
+grouping <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/Tumor_combined/Grouping_per_dataset.rds")
+cell_patient_mapping <- data.frame(Patient = HNSC_combined_tumor$Patient) %>% 
+  left_join(grouping, by = "Patient")
+rownames(cell_patient_mapping) <- colnames(HNSC_combined_tumor)
+
+# Use AddMetaData to add each column
+
+for(col in colnames(grouping)[-2]) { # Assuming the first column is 'Patient', which we already have
+  HNSC_combined_tumor <- AddMetaData(object = HNSC_combined_tumor, metadata = cell_patient_mapping[[col]], col.name = col)
+}
+HNSC_combined_tumor[["Group"]][is.na(HNSC_combined_tumor[["Group"]])] <- "Female"
+
+HNSC_combined_tumor@meta.data$Chr_Dosage <- case_when(
+  HNSC_combined_tumor@meta.data$Group == "High" ~ "XY",
+  HNSC_combined_tumor@meta.data$Group == "Low" ~ "X0",
+  HNSC_combined_tumor@meta.data$Group == "Female" ~ "XX",
+  HNSC_combined_tumor@meta.data$Group == "Intermediate" ~ "intermediate",
+  TRUE ~ NA_character_  # Handles any other unforeseen cases
+)
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q highmem
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=500GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(Seurat)
+library(SeuratDisk)
+library(SeuratWrappers)
+library(UCell)
+
+library(patchwork)
+library(harmony)
+library(rliger)
+library(reshape2)
+library(RColorBrewer)
+library(dplyr)
+library(stringr) 
+library(plyr)
+
+library(GSVA)
+library(GSEABase)
+library(GSVAdata)
+library(ggplot2)
+
+library(ProjecTILs)
+library(STACAS)
+library(ggplot2)
+library(SignatuR)
+library(UCell)
+
+HNSC_combined <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/male_female_clean.rds")
+
+HNSC_combined@meta.data$Dataset <- sub("_.*", "", rownames(HNSC_combined@meta.data))
+
+cells <- revalue(HNSC_combined@meta.data$Cell_Type, c("NK-cell"="NK Cells", "T-cell"="T Cells", "T.cells"="T Cells", "T_cells"="T Cells", "B-Cells" = "B Cells", "B-cell" = "B Cells", "B_cells" = "B Cells", "Macrophage" = "Macrophages", "Epithelial" =  "Epithelial Cells", "NormalEpith" =  "Epithelial Cells", "Mast.cells" = "Mast Cells", "Mast cell" = "Mast Cells", "Endothelial" = "Endothelial Cells", "Endothelial_cells"= "Endothelial Cells", "Endothelial.cells" = "Endothelial Cells", "Fibroblast" = "Fibroblasts", "Dendritic_cells" = "Denditric Cells", "Dendritic.cells" = "Denditric Cells", "Malignant.cells" = "Tumor"))
+
+cells <- revalue(cells, c("Epithelial.cells"="Epithelial Cells", "Mast_cells"="Mast Cells", "B_Plasma.cells"="Plasma cell", "27" ="Unknown"))
+HNSC_combined@meta.data$Cells <- cells
+
+nfeatures <- 1000  # define number of variable features to consider
+npcs <- 20  # define number of Principal Components for dimensionality reduction
+
+HNSC_combined <- UpdateSeuratObject(HNSC_combined) |>
+    NormalizeData()
+HNSC_combined.list <- SplitObject(HNSC_combined, split.by = "Dataset")
+HNSC_combined.stacas <- Run.STACAS(HNSC_combined.list, anchor.features = nfeatures, dims = 1:npcs, cell.labels = "Cells")
+HNSC_combined.stacas <- RunUMAP(HNSC_combined.stacas, dims = 1:npcs)
+saveRDS(HNSC_combined.stacas, "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_stacas.rds")
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q medium
+#BSUB -W 1:00 
+#BSUB -n 50 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(ggplot2)
+library(dplyr)
+library(patchwork)
+library(viridis)
+library(Seurat)
+library(scGate)
+
+HNSC_combined.stacas <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_stacas.rds")
+
+models.DB <- scGate::get_scGateDB()
+models.list <- models.DB$human$TME_HiRes
+HNSC_combined.stacas <- scGate(HNSC_combined.stacas, model = models.list, ncores = 4)
+
+saveRDS(HNSC_combined.stacas, "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_stacas.rds")
+```
+
+```{r}
+HNSC_combined <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_stacas_scGate.rds")
+HNSC_combined@meta.data <- HNSC_combined@meta.data %>%
+  mutate(Cells_Tumor_Integration = if_else(Tumor.y == "Tumor", "Tumor", scGate_multi))
+```
+
+```{r}
+DimPlot(HNSC_combined, group.by="Cells", raster = F, label = T)
+```
+
+```{r}
+DimPlot(HNSC_combined, group.by="Cells_Tumor_Integration", raster = F, label = T)
+```
+
+## Percentages of XX, XY and XO groups
+
+We select the groups of interest: HNSC_combined <- subset(HNSC_combined_groups, subset = (Chr_Dosage != "intermediate"))
+
+```{r}
+HNSC_combined_groups <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_groups.rds")
+```
+
+And remove the Dataset that has tinkered proportions of cells:
+
+```{r}
+HNSC_combined_groups <- subset(HNSC_combined_groups, subset = Dataset != c("Kurten"))
+```
+
+```{r}
+data <- HNSC_combined_groups@meta.data
+```
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(reshape2)
+
+# Create a contingency table
+tab <- table(data$Cells, data$Cells_Tumor_Integration)
+
+# Convert table to data frame for plotting
+tab_df <- as.data.frame(tab)
+colnames(tab_df) <- c("Original", "scGate", "Freq")
+```
+
+```{r}
+# Plot using ggplot2
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration")
+ggplot(tab_df, aes(x = Original, y = scGate, fill = Freq)) +
+  geom_tile(aes(width = 1, height = 1), colour = "white") +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(fill = "Count", x = "Original Label", y = "scGate Relabel")
+graph <- paste0("Overlap_cell_labels.pdf")
+  ggsave(graph)
+```
+
+```{r}
+color <-c("Bcell"= "#8dd3c7","CD4T" = "#ffffb3","CD8T" = "#bebada","Endothelial"= "#fb8072","Epithelial"= "#ffed6f","Fibroblast" = "#b3de69" ,"Macrophage"= "#fdb462","Mast" = "#fccde5","Monocyte"= "#d9d9d9","Multi" = "#bc80bd" , "Neutrophils"= "#ccebc5", "NK"= "#6a3d9a" , "panDC"= "#1f78b4" , "PlasmaCell" = "#c51b8a", "Tumor" = "#80b1d3")
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")
+
+metadata <- na.omit(data.frame(Cluster = HNSC_combined_groups$Cells_Tumor_Integration, Group = HNSC_combined_groups$Chr_Dosage, HPV = HNSC_combined_groups$HPV))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  grouping$Group <- factor(grouping$Group, levels = c("XX", "X0", "XY"))
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")
+theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Sex Chr Dosage") + ylab("Percent") + labs(fill = "Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("Chr_Dosage", "_relative_number.pdf")
+  ggsave(graph)
+```
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")
+
+theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Sex Chr Dosage") + ylab("Percent") + labs(fill = "Cell Type") +
+  facet_grid(. ~ HPV)
+  
+  graph <- paste0("Chr_Dosage", "_absolute_number.pdf")
+  ggsave(graph)
+```
+```{r}
+HNSC_combined_immune <- subset(HNSC_combined_groups, subset = Cells_Tumor %in% c("Bcell","CD4T","CD8T", "Macrophage","Mast","Monocyte","Neutrophils","NK", "panDC" ))
+```
+
+```{r}
+color <-c("Bcell"= "#8dd3c7","CD4T" = "#ffffb3","CD8T" = "#bebada","Macrophage"= "#b3de69","Mast" = "#fccde5","Monocyte"= "#bc80bd", "Neutrophils"= "#ccebc5", "NK"= "#c51b8a" , "panDC"= "#1f78b4")
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")
+metadata <- na.omit(data.frame(Cluster = HNSC_combined_immune$Cells_Tumor_Integration, Group = HNSC_combined_immune$Chr_Dosage, HPV = HNSC_combined_immune$HPV))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  grouping$Group <- factor(grouping$Group, levels = c("XX", "X0", "XY"))
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")
+theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Sex Chr Dosage") + ylab("Percent") + labs(fill = "Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("Chr_Dosage_ImmuneCell", "_relative_number.pdf")
+  ggsave(graph)
+```
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")
+ theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Sex Chr Dosage") + ylab("Percent") + labs(fill = "Cell Type") +
+  facet_grid(. ~ HPV)
+  
+  graph <- paste0("Chr_Dosage_ImmuneCell", "_absolute_number.pdf")
+  ggsave(graph)
+```
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q medium
+#BSUB -W 1:00 
+#BSUB -n 50 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(Seurat)
+library(SeuratDisk)
+library(SeuratWrappers)
+library(ProjecTILs)
+library(STACAS)
+library(ggplot2)
+library(SignatuR)
+library(UCell)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration")
+HNSC_combined_groups <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_groups.rds")
+cd8tcell <- subset(HNSC_combined_groups, subset= (scGate_multi == "CD8T"))
+options(timeout = max(900, getOption("timeout")))
+ref.cd8 <- load.reference.map("CD8T_human_ref_v1.rds")
+DefaultAssay(cd8tcell) <- "RNA"
+cd8tcell <- ProjecTILs.classifier(query = cd8tcell, ref = ref.cd8, filter.cells = F)
+cd8tcell$CD8Type <- cd8tcell$functional.cluster
+saveRDS(cd8tcell, "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/CD8T_Chr_Dosage.rds")
+```
+
+```{r}
+cd8tcell <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/CD8T_Chr_Dosage.rds")
+cd8tcell <- subset(cd8tcell, subset = Dataset != c("Kurten"))
+```
+
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")
+
+color <-c("CD8.CM"= "#8dd3c7","CD8.EM"  = "#ffffb3","CD8.MAIT" = "#bebada","CD8.NaiveLike"= "#fccde5","CD8.TEMRA" = "#80b1d3","CD8.TEX" = "#fdb462","CD8.TPEX"= "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = cd8tcell@meta.data$CD8Type, Group = cd8tcell@meta.data$Chr_Dosage, HPV = cd8tcell@meta.data$HPV))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  grouping$Group <- factor(grouping$Group, levels = c("XX", "X0", "XY"))
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")
+
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD8T Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Sex Chr Dosage") + ylab("Percent") + labs(fill = "CD8T Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("Chr_Dosage_CD8T_CellType", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")
+
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD8T Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Sex Chr Dosage") + ylab("Percent") + labs(fill = "CD8T Cell Type") +
+  facet_grid(.~ HPV) 
+  graph <- paste0("Chr_Dosage_CD8T_CellType", "_absolute_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q medium
+#BSUB -W 1:00 
+#BSUB -n 50 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(Seurat)
+library(SeuratDisk)
+library(SeuratWrappers)
+library(ProjecTILs)
+library(STACAS)
+library(ggplot2)
+library(SignatuR)
+library(UCell)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration")
+HNSC_combined_groups <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_groups.rds")
+cd4tcell <- subset(HNSC_combined_groups, subset= (scGate_multi == "CD4T"))
+options(timeout = max(900, getOption("timeout")))
+ref.cd4 <- load.reference.map("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/CD4T_human_ref_v1.rds")
+DefaultAssay(cd4tcell) <- "RNA"
+cd4tcell <- ProjecTILs.classifier(query = cd4tcell, ref = ref.cd4, filter.cells = F)
+cd4tcell$CD4Type <- cd4tcell$functional.cluster
+saveRDS(cd4tcell, "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/CD4T_Chr_Dosage.rds")
+```
+
+```{r}
+cd4tcell <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/CD4T_Chr_Dosage.rds")
+cd4tcell <- subset(cd4tcell, subset = Dataset != c("Kurten"))
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")
+
+color <-c("CD4.CTL_EOMES"= "#8dd3c7","CD4.CTL_Exh"  = "#ffffb3","CD4.CTL_GNLY" = "#bebada","CD4.NaiveLike"= "#fccde5","CD4.Tfh" = "#80b1d3","CD4.Th17"  = "#fdb462","CD4.Treg" = "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = cd4tcell@meta.data$CD4Type, Group = cd4tcell@meta.data$Chr_Dosage, HPV = cd4tcell@meta.data$HPV))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  grouping$Group <- factor(grouping$Group, levels = c("XX", "X0", "XY"))
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")
+
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD4T Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Sex Chr Dosage") + ylab("Percent") + labs(fill = "CD4T Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("Chr_Dosage_CD4T_CellType", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")
+
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD4T Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Sex Chr Dosage") + ylab("Cell Number") + labs(fill = "CD4T Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("Chr_Dosage_CD4T_CellType", "_absolute_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q medium
+#BSUB -W 1:00 
+#BSUB -n 50 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(Seurat)
+library(SeuratDisk)
+library(SeuratWrappers)
+library(ProjecTILs)
+library(STACAS)
+library(ggplot2)
+library(SignatuR)
+library(UCell)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration")
+HNSC_combined_groups <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_groups.rds")
+dccell <- subset(HNSC_combined_groups, subset= (scGate_multi == "panDC"))
+options(timeout = max(900, getOption("timeout")))
+ref.dc <- load.reference.map("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/DC_human_ref_v1.rds")
+DefaultAssay(dccell) <- "RNA"
+dccell <- ProjecTILs.classifier(query = dccell, ref = ref.dc, filter.cells = F)
+dccell$DCType <- dccell$functional.cluster
+saveRDS(dccell, "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/DC_Chr_Dosage.rds")
+```
+
+```{r}
+dccell <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/DC_Chr_Dosage.rds")
+dccell <- subset(dccell, subset = Dataset != c("Kurten"))
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")                                                                                      
+color <-c("AS-DC"= "#8dd3c7","cDC1"  = "#ffffb3","cDC2_CD1A" = "#bebada","cDC2_CLEC10A"= "#fccde5","DC3"  = "#80b1d3","MonoDC"  = "#fdb462","pDC"  = "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = dccell@meta.data$DCType, Group = dccell@meta.data$Chr_Dosage, HPV = dccell@meta.data$HPV))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  grouping$Group <- factor(grouping$Group, levels = c("XX", "X0", "XY"))
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")
+ theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("DC Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Sex Chr Dosage") + ylab("Percent") + labs(fill = "DC Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("Chr_Dosage_DC_CellType", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("DC Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Sex Chr Dosage") + ylab("Cell Number") + labs(fill = "DC Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("Chr_Dosage_DC_CellType", "_absolute_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q medium
+#BSUB -W 1:00 
+#BSUB -n 50 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(Seurat)
+library(SeuratDisk)
+library(SeuratWrappers)
+library(ProjecTILs)
+library(STACAS)
+library(ggplot2)
+library(SignatuR)
+library(UCell)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration")
+HNSC_combined_groups <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_groups.rds")
+fibroblast <- subset(HNSC_combined_groups, subset= (scGate_multi == "Fibroblast"))
+options(timeout = max(900, getOption("timeout")))
+ref.fibroblast <- load.reference.map("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/ref.fibroblast.rds")
+DefaultAssay(fibroblast) <- "RNA"
+fibroblast <- ProjecTILs.classifier(query = fibroblast, ref = ref.fibroblast, filter.cells = F)
+saveRDS(fibroblast, "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Fibroblast_Chr_Dosage.rds")
+```
+
+```{r}
+fibroblast <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Fibroblast_Chr_Dosage.rds")
+fibroblast$Fibroblast_Type <- fibroblast$functional.cluster
+fibroblast@meta.data <- fibroblast@meta.data %>%
+  mutate(Fibroblast_Type = if_else(Fibroblast_Type %in% c("perycite", "Perycite"), "Perycite", Fibroblast_Type))
+fibroblast <- subset(fibroblast, subset = Dataset != c("Kurten"))
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")                                                                                      
+color <-c("mCAF" = "#8dd3c7", "tpCAF" = "#ffffb3", "IDO_CAF" = "#fb8072", "iCAF" = "#b3de69", "apCAF" = "#fdb462", "Pericyte" = "#fccde5",  "rCAF+apCAF"= "#6a3d9a", "hsp_tpCAF" = "#1f78b4",  "vCAF" = "#bc80bd",  "other" = "#c51b8a","rCAF" = "#ccebc5", "dCAF"= "#ffed6f")
+
+metadata <- na.omit(data.frame(Cluster = fibroblast@meta.data$Fibroblast_Type, Group = fibroblast@meta.data$Chr_Dosage, HPV = fibroblast@meta.data$HPV))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  grouping$Group <- factor(grouping$Group, levels = c("XX", "X0", "XY"))
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")
+ theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("Fibroblast Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Sex Chr Dosage") + ylab("Percent") + labs(fill = "Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("Chr_Dosage_Fibroblast_CellType", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Percentage_Graphs_XX-XY-X0")
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("Fibroblast Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Sex Chr Dosage") + ylab("Cell Number") + labs(fill = "DC Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("Chr_Dosage_Fibroblast_CellType", "_absolute_number.pdf")
+  ggsave(graph)
+```
+```{r}
+HNSC_combined_groups <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_groups.rds")
+fibroblast <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Fibroblast_Chr_Dosage.rds")
+fibroblast$Fibroblast_Type <- fibroblast$functional.cluster
+fibroblast@meta.data <- fibroblast@meta.data %>%
+  mutate(Fibroblast_Type = if_else(Fibroblast_Type %in% c("perycite", "Perycite"), "Perycite", Fibroblast_Type))
+
+fibroblast_type <- data.frame(Cell = fibroblast$Cell_Labels, Fibroblast = fibroblast$Fibroblast_Type)
+
+HNSC_combined_groups@meta.data <- HNSC_combined_groups@meta.data %>%
+  left_join(fibroblast_type, by = c("Cell_Labels" = "Cell"))
+
+HNSC_combined_groups@meta.data <- HNSC_combined_groups@meta.data %>%
+  mutate(Cells_Fibroblast = coalesce(Fibroblast.y, Cells_Tumor_Integration))
+
+saveRDS(HNSC_combined_groups, "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_fibroblast.rds")
+```
+
+```{r}
+HNSC_combined_Y <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_Y.rds")
+male <- subset(HNSC_combined_Y, subset = (Sex == c("Male")))
+VlnPlot(male, features = c("pct_chrY"), group.by = c("Cells_Tumor"), split.by = c("Patient"), raster = F)
+```
+
+```{r}
+XO <- subset(HNSC_combined_Y, subset = (Chr_Dosage == c("X0")))
+VlnPlot(XO, features = c("pct_chrY"), group.by = c("Cells_Tumor"), split.by = c("Patient"))
+```
+
+```{r}
+XY <- subset(HNSC_combined_Y, subset = (Chr_Dosage == c("XY")))
+VlnPlot(XY, features = c("pct_chrY"), group.by = c("Cells_Tumor"), split.by = c("Patient"))
+```
+
+
+```{r}
+metadata <- HNSC_combined_Y@meta.data
+write.csv(metadata, "HNSC_combined_metadata.csv")
+```
+
+```{r}
+HNSC_combined_Y <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_Y.rds")
+male <- subset(HNSC_combined_Y, subset = (Sex == c("Male")))
+VlnPlot(male, features = c("pct_chrY"), group.by = c("Cells_Tumor"), split.by = c("Patient"), raster = F)
+```
+
+```{r}
+XO <- subset(HNSC_combined_Y, subset = (Chr_Dosage == c("X0")))
+VlnPlot(XO, features = c("pct_chrY"), group.by = c("Cells_Tumor"), split.by = c("Patient"))
+```
+
+```{r}
+XY <- subset(HNSC_combined_Y, subset = (Chr_Dosage == c("XY")))
+VlnPlot(XY, features = c("pct_chrY"), group.by = c("Cells_Tumor"), split.by = c("Patient"))
+metadata_XY <- XY@meta.data
+summary_data <- metadata_XY %>%
+  group_by(Chr_Dosage, Cells_Tumor) 
+```
+
+
+```{r}
+
+metadata_XY <- subset(metadata, subset = (Chr_Dosage == c("XY")))
+summary_data <- metadata_XY %>%
+  group_by(Cells_Tumor) %>%
+  summarise(mean_pct_Y = mean(pct_chrY, na.rm = TRUE))
+```
+
+```{r}
+metadata <- HNSC_combined_Y@meta.data
+metadata <- data.frame(Chr_Dosage = metadata$Chr_Dosage, pct_y = metadata$pct_chrY, Cell_Type = metadata$Cells_Tumor, HPV = metadata$HPV)
+metadata <- subset(metadata, subset = (Chr_Dosage != c("intermediate")))
+summary_data <- metadata %>%
+  group_by(Chr_Dosage, Cell_Type) %>%
+  dplyr::summarize(mean_pct_Y = mean(pct_y, na.rm = TRUE))
+```
+
+```{r}
+library(dplyr)
+
+# Filter data for only XY and X0 groups
+filtered_data <- metadata %>%
+  filter(Chr_Dosage %in% c("XY", "X0"))
+
+# Perform pairwise t-tests for each Cell_Type
+t_test_results <- filtered_data %>%
+  group_by(Cell_Type) %>%
+  dplyr::summarize(p_value = t.test(pct_y[Chr_Dosage == "XY"], pct_y[Chr_Dosage == "X0"], .groups = 'drop'))  # Drop the grouping
+
+# Adjust p-values for multiple testing if necessary, e.g., using Bonferroni correction
+t_test_results$p_adjusted <- p.adjust(t_test_results$p_value, method = "bonferroni")
+```
+
+
+```{r}
+ggplot(metadata, aes(x = Cell_Type, y = pct_Y, fill = Chr_Dosage)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(title = "Mean pct_Y by Cell Type and Chromosome Dosage",
+       x = "Cell Type",
+       y = "Mean pct_Y") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1")  # This uses color palettes suitable for categorical data
+```
+
+```{r}
+ggplot(metadata, aes(x = Cell_Type, y = pct_y, fill = Chr_Dosage)) +
+  geom_violin(trim = FALSE, position = position_dodge(width = 0.8)) + # trim=FALSE shows the full range of data
+  labs(title = "Distribution of pct_Y Values by Cell Type and Chr_Dosage",
+       x = "Cell Type",
+       y = "pct_Y") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  geom_jitter(position = position_dodge(width = 0.9), width = 0.2, size = 1.5, alpha = 0.7) +  # Adds jittered points to show individual observations
+  scale_y_continuous(limits = c(0, 0.010)) +  # Sets y-axis limits
+  scale_color_brewer(palette = "Set1") 
+```
+
+```{r}
+ggplot(metadata, aes(x = Cell_Type, y = pct_y, fill = Chr_Dosage)) +
+  geom_boxplot(width=0.8) + theme_minimal()
+```
+
+```{r}
+library(ggplot2)
+library(ggsignif)
+# Subset the data for statistical test
+filtered_data <- metadata %>%
+  filter(Chr_Dosage %in% c("XY", "X0"))
+ggplot(filtered_data, aes(x = Cell_Type, y = pct_y, fill = Chr_Dosage)) +
+  labs(title = "Y Chromosome Expression by Cell Type",
+       x = "Cell Type",
+       y = "Percentage of Y Chromosome Expression") +
+  geom_boxplot(width = 0.7) +
+  theme_minimal() + 
+  stat_compare_means(label = "p.signif", method = "t.test") +
+  facet_grid(. ~ HPV)
+```
+
+
+```{r}
+Fibroblast_Chr_Dosage <- NormalizeData(Fibroblast_Chr_Dosage)
+Fibroblast_Chr_Dosage <- FindVariableFeatures(Fibroblast_Chr_Dosage)
+Fibroblast_Chr_Dosage <- ScaleData(Fibroblast_Chr_Dosage)
+Fibroblast_Chr_Dosage <- RunPCA(Fibroblast_Chr_Dosage)
+Fibroblast_Chr_Dosage <- FindNeighbors(Fibroblast_Chr_Dosage, dims = 1:30, reduction = "pca")
+Fibroblast_Chr_Dosage <- FindClusters(Fibroblast_Chr_Dosage, resolution = 2, cluster.name = "unintegrated_clusters")
+Fibroblast_Chr_Dosage <- RunUMAP(Fibroblast_Chr_Dosage, dims = 1:30, reduction = "pca", reduction.name = "umap.unintegrated")
+```
+
+```{r}
+class <- subset(Fibroblast_Chr_Dosage, subset = functional.cluster %in% c("mCAF","iCAF"))
+```
+
+
+```{r}
+Idents(class) <- class$functional.cluster
+FeaturePlot(object = class,
+features = c("PTGS2", "AR"),
+reduction = "umap", pt.size = 0.8, blend = TRUE, blend.threshold = 0.25, order = T, label = T, split.by = "Chr_Dosage")
+```
+
+```{r}
+VlnPlot(Fibroblast_Chr_Dosage, features = c("PTGS2"), group.by = c("functional.cluster"), split.by = c("Chr_Dosage"))
+```
+
+```{r}
+VlnPlot(Fibroblast_Chr_Dosage, features = c("ACTA2"), group.by = c("functional.cluster"), split.by = c("Chr_Dosage"))
+```
+
+```{r}
+HNSC_combined <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_stacas_scGate.rds")
+HNSC_combined@meta.data <- HNSC_combined@meta.data %>%
+  mutate(Cells_Tumor_Integration = if_else(Tumor.y == "Tumor", "Tumor", scGate_multi))
+HNSCC_atlas_metadata <- HNSC_combined@meta.data
+```
+
+
+## Statistical Analysis of Cell Proportions
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggpubr)
+
+# Assuming data needs to be processed to calculate proportions
+data_summary <- HNSCC_atlas_metadata %>%
+  group_by(Patient, Sex, HPV, Cells_Tumor_Integration) %>%
+  summarise(Count = n(), .groups = 'drop') %>%
+  group_by(Patient, Sex, HPV) %>%
+  mutate(Total = sum(Count), Proportion = Count / Total) %>%
+  ungroup()
+
+# Create a long format data for plotting
+data_long <- data_summary %>%
+  select(Patient, Sex, HPV, Cells_Tumor_Integration, Proportion) %>%
+  pivot_longer(cols = Proportion, names_to = "Variable", values_to = "Value")
+
+# Split the data by HPV status
+data_hpv_plus <- filter(data_long, HPV == "HPV+")
+data_hpv_minus <- filter(data_long, HPV == "HPV-")
+
+ggplot(data_long, aes(x = Cells_Tumor_Integration, y = Value, fill = Sex)) +
+    geom_boxplot(outlier.shape = NA, position = position_dodge(0.8)) +
+    #stat_boxplot(geom ='errorbar', width=0.8, position = position_dodge(0.8)) + # Add error bars
+    #facet_wrap(~Cell_Type, scales = "free_y") +
+    stat_compare_means(method = "wilcox.test", label = "p.signif") +
+    labs(title = "HPV -", x = "Cell Type", y = "Proportion") +
+    facet_grid(. ~ HPV) +
+    theme_minimal() +
+    theme(legend.position = "top",
+          plot.title = element_text(size = 14, face = "bold"),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          strip.background = element_blank())
+```
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggpubr)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Atlas_Images")
+
+# Process data to calculate proportions
+data_summary <- HNSCC_atlas_metadata %>%
+  group_by(Patient, HPV, Cells_Tumor_Integration) %>%
+  summarise(Count = n(), .groups = 'drop') %>%
+  group_by(Patient, HPV) %>%
+  mutate(Total = sum(Count), Proportion = Count / Total) %>%
+  ungroup()
+
+# Create a long format data for plotting
+data_long <- data_summary %>%
+  select(Patient, HPV, Cells_Tumor_Integration, Proportion) %>%
+  pivot_longer(cols = Proportion, names_to = "Variable", values_to = "Value")
+
+# Plot the data
+plot <- ggplot(data_long, aes(x = Cells_Tumor_Integration, y = Value, fill = HPV)) +
+    geom_boxplot(outlier.shape = NA, position = position_dodge(0.8)) +
+    stat_compare_means(method = "wilcox.test", label = "p.signif") +
+    labs(title = "HPV Status Comparison", x = "Cell Type", y = "Proportion") +
+    theme_minimal() +
+    theme(legend.position = "top",
+          plot.title = element_text(size = 14, face = "bold"),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+          strip.background = element_blank())
+
+# Save the plot as a PDF
+ggsave("HPV_Status_Comparison.pdf", plot = plot, width = 10, height = 6)
+```
+
+```{r}
+patient <- subset(data_long, subset = Patient == "BHN17")
+sum(patient$Value)
+
+```
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggpubr)
+
+# Assuming data needs to be processed to calculate proportions
+data_summary <- HNSCC_atlas_metadata %>%
+  group_by(Patient, Sex, HPV, Cells_Tumor_Integration) %>%
+  summarise(Count = n(), .groups = 'drop') %>%
+  group_by(Patient, Sex, HPV) %>%
+  mutate(Total = sum(Count), Proportion = Count / Total) %>%
+  ungroup()
+
+data_summary <- data_summary %>%
+  mutate(Log_Proportion = log10(Proportion))
+
+# Create a long format data for plotting
+data_long <- data_summary %>%
+  select(Patient, Sex, HPV, Cells_Tumor_Integration, Log_Proportion) %>%
+  pivot_longer(cols = Log_Proportion, names_to = "Variable", values_to = "Value")
+
+# Split the data by HPV status
+data_hpv_plus <- filter(data_long, HPV == "HPV+")
+data_hpv_minus <- filter(data_long, HPV == "HPV-")
+
+ggplot(data_long, aes(x = Cells_Tumor_Integration, y = Value, fill = Sex)) +
+    geom_boxplot(outlier.shape = NA, position = position_dodge(0.8)) +
+    #stat_boxplot(geom ='errorbar', width=0.8, position = position_dodge(0.8)) + # Add error bars
+    #facet_wrap(~Cell_Type, scales = "free_y") +
+    stat_compare_means(method = "wilcox.test", label = "p.format") +
+    labs(title = "HPV -", x = "Cell Type", y = "Log Transformed Proportion") +
+    facet_grid(. ~ HPV) +
+    theme_minimal() +
+    theme(legend.position = "top",
+          plot.title = element_text(size = 14, face = "bold"),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          strip.background = element_blank())
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggpubr)
+
+HNSCC_atlas_metadata <- subset(HNSCC_atlas_metadata, subset = Dataset != c("Kurten"))
+
+# Assuming data needs to be processed to calculate proportions
+data_summary <- HNSCC_atlas_metadata %>%
+  group_by(Patient, Sex, HPV, Cells_Tumor_Integration) %>%
+  summarise(Count = n(), .groups = 'drop') %>%
+  group_by(Patient, Sex, HPV) %>%
+  mutate(Total = sum(Count), Proportion = Count / Total) %>%
+  ungroup()
+
+#data_summary <- data_summary %>%
+  #mutate(Log_Proportion = log10(Proportion))
+
+# Create a long format data for plotting
+data_long <- data_summary %>%
+  select(Patient, Sex, HPV, Cells_Tumor_Integration, Proportion) %>%
+  pivot_longer(cols = Proportion, names_to = "Variable", values_to = "Value")
+
+# Split the data by HPV status
+data_hpv_plus <- filter(data_long, HPV == "HPV+")
+data_hpv_minus <- filter(data_long, HPV == "HPV-")
+
+ggplot(data_long, aes(x = Cells_Tumor_Integration, y = Value, fill = Sex)) +
+    geom_boxplot(outlier.shape = NA, position = position_dodge(0.8)) +
+    #stat_boxplot(geom ='errorbar', width=0.8, position = position_dodge(0.8)) + # Add error bars
+    #facet_wrap(~Cell_Type, scales = "free_y") +
+    stat_compare_means(method = "wilcox.test", label = "p.format") +
+    labs(x = "Cell Type", y = "Cell Proportion") +
+    facet_grid(. ~ HPV) +
+    theme_minimal() +
+    theme(legend.position = "top",
+          plot.title = element_text(size = 14, face = "bold"),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          strip.background = element_blank())
+```
+
+```{r}
+CD8 <- subset(data_long, subset = Cells_Tumor_Integration =="CD8T")
+ggplot(CD8, aes(x = Cells_Tumor_Integration, y = Value, fill = Sex)) +
+    geom_boxplot(outlier.shape = NA, position = position_dodge(0.8)) +
+    #stat_boxplot(geom ='errorbar', width=0.8, position = position_dodge(0.8)) + # Add error bars
+    #facet_wrap(~Cell_Type, scales = "free_y") +
+    stat_compare_means(method = "wilcox.test", label = "p.format") +
+    labs(title = "HPV -", x = "Cell Type", y = "Log Transformed Proportion") +
+    facet_grid(. ~ HPV) +
+    theme_minimal() +
+    theme(legend.position = "top",
+          plot.title = element_text(size = 14, face = "bold"),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          strip.background = element_blank())
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+
+# Unique cell types for looping
+cell_types <- unique(data_long$Cells_Tumor_Integration)
+
+# List to store plots
+plots_list <- list()
+
+# Loop through each cell type and create a plot
+for (cell in cell_types) {
+  CD8 <- subset(data_long, Cells_Tumor_Integration == cell)
+  p <- ggplot(CD8, aes(x = Cells_Tumor_Integration, y = Value, fill = Sex)) +
+    geom_boxplot(outlier.shape = NA, position = position_dodge(0.8)) +
+    stat_compare_means(method = "wilcox.test", label = "p.format") +
+    labs(title = paste("HPV -", cell), x = "Cell Type", y = "Log Transformed Proportion") +
+    facet_grid(. ~ HPV) +
+    theme_minimal() +
+    theme(legend.position = "top",
+          plot.title = element_text(size = 14, face = "bold"),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          strip.background = element_blank())
+  plots_list[[cell]] <- p
+}
+
+# Check the length of the list to ensure all plots are stored
+length(plots_list)
+```
+```{r}
+plots_list$NK
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# Calculate proportions normalized by total cells per patient
+
+data_summary <- HNSCC_atlas_metadata %>%
+  group_by(Patient, HPV, Sex, Cells_Tumor_Integration) %>%
+  summarise(Count = n(), .groups = 'drop') %>%
+  group_by(Patient, HPV, Sex) %>%
+  mutate(Total_Cells = sum(Count)) %>%
+  ungroup() %>%
+  mutate(Proportion = Count / Total_Cells)
+
+# Simulate counts for proportion test by assuming a large base number
+data_summary <- data_summary %>%
+  mutate(Simulated_Count = round(Proportion * 10000))  
+
+# Aggregate simulated counts for each cell type, sex, and HPV status
+agg_data <- data_summary %>%
+  group_by(HPV, Sex, Cells_Tumor_Integration) %>%
+  summarise(Total_Simulated_Count = round(mean(Simulated_Count)), .groups = 'drop')
+
+# Pivot data for prop.test
+pivot_data <- agg_data %>%
+  pivot_wider(names_from = Sex, values_from = Total_Simulated_Count, values_fill = list(Total_Simulated_Count = 0))
+
+HPVpos <- subset(pivot_data, subset = HPV == "HPV+")
+HPVpos <- as.matrix(HPVpos[,3:4]) 
+HPVneg <- subset(pivot_data, subset = HPV == "HPV-")
+HPVneg <- as.matrix(HPVneg[,3:4]) 
+
+# Perform prop.test
+prop.test(HPVpos)
+prop.test(HPVneg)
+
+
+# Load necessary library
+library(dplyr)
+library(purrr)
+
+# Apply the proportion test to each row
+HPVneg <- as.data.frame(HPVneg)
+results <- HPVneg %>%
+  mutate(
+    prop_test = map2(Female, Male, ~prop.test(c(.x, .y), c(.x + .y, .x + .y), correct = FALSE)),
+    p_value = map_dbl(prop_test, ~.x$p.value)
+  )
+
+# Adjust for multiple comparisons using Bonferroni correction
+results$p_adjusted <- p.adjust(results$p_value, method = "bonferroni")
+
+# Print the results
+print(results)
+```
+
+
+```{r}
+results$Cell_Type <- subset(pivot_data, subset = HPV == "HPV-")$Cells_Tumor_Integration
+```
+
+```{r}
+library(ggplot2)
+
+long_results <- tidyr::pivot_longer(results, cols = c("Female", "Male"), names_to = "Sex", values_to = "Count")
+
+ggplot(long_results, aes(x = Cell_Type, y = Count, fill = Sex)) +
+  geom_bar(stat = "identity", position = "stack") +
+  geom_text(data = subset(long_results, Sex == "Male"),
+            aes(label = ifelse(p_adjusted < 0.05, sprintf("p=%.2e", p_adjusted), "")),
+            position = position_stack(vjust = 1.05), 
+            size = 3, color = "black") +
+  scale_fill_manual(values = c("Female" = "#FF9999", "Male" = "#9999FF")) +
+  labs(x = "Cell Type", y = "Count", title = "HPV-") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+```
+
+```{r}
+# Apply the proportion test to each row
+HPVpos <- as.data.frame(HPVpos)
+results <- HPVpos %>%
+  mutate(
+    prop_test = map2(Female, Male, ~prop.test(c(.x, .y), c(.x + .y, .x + .y), correct = FALSE)),
+    p_value = map_dbl(prop_test, ~.x$p.value)
+  )
+
+# Adjust for multiple comparisons using Bonferroni correction
+results$p_adjusted <- p.adjust(results$p_value, method = "bonferroni")
+
+results$Cell_Type <- subset(pivot_data, subset = HPV == "HPV+")$Cells_Tumor_Integration
+
+library(ggplot2)
+
+long_results <- tidyr::pivot_longer(results, cols = c("Female", "Male"), names_to = "Sex", values_to = "Count")
+
+ggplot(long_results, aes(x = Cell_Type, y = Count, fill = Sex)) +
+  geom_bar(stat = "identity", position = "stack") +
+  geom_text(data = subset(long_results, Sex == "Male"),
+            aes(label = ifelse(p_adjusted < 0.05, sprintf("p=%.2e", p_adjusted), "")),
+            position = position_stack(vjust = 1.05), 
+            size = 3, color = "black") +
+  scale_fill_manual(values = c("Female" = "#FF9999", "Male" = "#9999FF")) +
+  labs(x = "Cell Type", y = "Count", title = "HPV+") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(purrr)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Atlas_Images")
+
+# Calculate proportions normalized by total cells per patient
+data_summary <- HNSCC_atlas_metadata %>%
+  group_by(Patient, HPV, Cells_Tumor_Integration) %>%
+  summarise(Count = n(), .groups = 'drop') %>%
+  group_by(Patient, HPV) %>%
+  mutate(Total_Cells = sum(Count)) %>%
+  ungroup() %>%
+  mutate(Proportion = Count / Total_Cells)
+
+# Simulate counts for proportion test by assuming a large base number
+data_summary <- data_summary %>%
+  mutate(Simulated_Count = round(Proportion * 10000))  
+
+# Aggregate simulated counts for each cell type and HPV status
+agg_data <- data_summary %>%
+  group_by(HPV, Cells_Tumor_Integration) %>%
+  summarise(Total_Simulated_Count = sum(Simulated_Count), .groups = 'drop')
+
+# Pivot data for proportion tests
+pivot_data <- agg_data %>%
+  pivot_wider(names_from = HPV, values_from = Total_Simulated_Count, values_fill = list(Total_Simulated_Count = 0))
+
+# Perform statistical tests
+pivot_data <- pivot_data %>%
+  mutate(
+    prop_test = map2(`HPV+`, `HPV-`, ~prop.test(c(.x, .y), c(sum(c(.x, .y)), sum(c(.x, .y))), correct = FALSE)),
+    p_value = map_dbl(prop_test, ~.x$p.value),
+    p_adjusted = p.adjust(p_value, method = "bonferroni")
+  )
+
+# Transform to long format for stacked bar chart
+long_data <- agg_data %>%
+  pivot_longer(cols = Total_Simulated_Count, names_to = "HPV_Status", values_to = "Count") %>%
+  left_join(pivot_data %>% select(Cells_Tumor_Integration, p_adjusted), by = "Cells_Tumor_Integration")
+
+# Plot stacked bar chart with asterisk for statistical significance
+plot <- ggplot(long_data, aes(x = Cells_Tumor_Integration, y = Count, fill = HPV)) +
+  geom_bar(stat = "identity", position = "stack") +
+  geom_text(aes(label = ifelse(HPV == "HPV-" & p_adjusted < 0.05, "*", "")), 
+            position = position_stack(vjust = 1.05), 
+            size = 5, color = "black") +
+  scale_fill_manual(values = c("HPV+" = "#FF9999", "HPV-" = "#9999FF")) +
+  labs(x = "Cell Type", y = "Count", title = "HPV+ vs. HPV- Comparison with Statistical Significance") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+ggsave("HPV_Status_Comparison_Projection.pdf", plot = plot, width = 10, height = 6)
+```
+
+```{r}
+library(stringr)
+
+color <-c("Bcell"= "#8dd3c7","CD4T" = "#ffffb3","CD8T" = "#bebada","Endothelial"= "#fb8072","Epithelial"= "#ffed6f","Fibroblast" = "#b3de69" ,"Macrophage"= "#fdb462","Mast" = "#fccde5","Monocyte"= "#d9d9d9","Multi" = "#bc80bd" , "Neutrophils"= "#ccebc5", "NK"= "#6a3d9a" , "panDC"= "#1f78b4" , "PlasmaCell" = "#c51b8a", "Tumor" = "#80b1d3")
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs_female")
+
+metadata <- na.omit(data.frame(Cluster = HNSCC_atlas_metadata$Cells_Tumor_Integration, Group = HNSCC_atlas_metadata$Sex, HPV = HNSCC_atlas_metadata$HPV))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+```
+
+```{r}
+#setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs_female")
+theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Sex") + ylab("Percent") + labs(fill = "Cell Type") +
+  facet_grid(. ~ HPV) 
+  #graph <- paste0("FM_Cell", "_relative_number.pdf")
+  #ggsave(graph)
+```
+
+```{r}
+ggplot(grouping, aes(x = Cluster, y = pct, fill = Group)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_manual("Sex", values = c("Male" = "#FF9999", "Female" = "#9999FF")) +
+  ggtitle("Cell Type Composition by Sex") +
+  geom_text(aes(label = lbl), position = position_dodge(width = 0.9), vjust = -0.5, size = 3) +
+  xlab("Cell Type") + ylab("Percent") +
+  facet_grid(. ~ HPV) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+grouping <- grouping %>%
+  group_by(HPV, Group, Cluster) %>%
+  summarise(pct = sum(pct, na.rm = TRUE), .groups = "drop") %>%
+  mutate(
+    pct = ifelse(Group == "Male", -pct, pct),  # Make Male percentages negative
+    lbl = scales::percent(abs(pct))  # Recalculate labels as absolute percentages
+  )
+
+
+ggplot(grouping, aes(x = Cluster, y = pct, fill = Group)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual("Sex", values = c("Male" = "#FF9999", "Female" = "#9999FF")) +
+  ggtitle("Diverging Cell Type Composition by Sex") +
+  geom_text(aes(label = lbl), 
+            position = position_stack(vjust = 0.5), size = 3, color = "black") +
+  xlab("Cell Type") + ylab("Percent") +
+  facet_grid(. ~ HPV) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+ggplot(grouping, aes(x = Cluster, y = pct, fill = Group)) +
+  geom_area(position = "fill", alpha = 0.8) +
+  scale_fill_manual("Sex", values = c("Male" = "#FF9999", "Female" = "#9999FF")) +
+  ggtitle("Proportional Cell Type Composition by Sex") +
+  xlab("Cell Type") + ylab("Proportion") +
+  facet_grid(. ~ HPV) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+library(ggplot2)
+library(ggiraphExtra)
+
+ggplot(grouping, aes(x = as.factor(Group), y = pct, fill = Cluster)) +
+  geom_bar(stat = "identity", position = "fill", width = 1) +
+  scale_fill_manual("Cell Type", values = color) +
+  coord_polar(theta = "y") +
+  ggtitle("Circular Representation of Cell Type Composition") +
+  theme_void() +
+  theme(legend.position = "right")
+```
+```{r}
+library(ggalluvial)
+
+ggplot(grouping, aes(axis1 = Group, axis2 = Cluster, y = pct)) +
+  geom_alluvium(aes(fill = Cluster)) +
+  geom_stratum() +
+  geom_text(stat = "stratum", aes(label = after_stat(stratum))) +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle("Alluvial Plot of Cell Type Composition by Sex") +
+  theme_minimal()
+```
+
+```{r}
+library(reshape2)
+
+heatmap_data <- dcast(grouping, Cluster ~ Group, value.var = "pct")
+
+ggplot(melt(heatmap_data), aes(x = Cluster, y = Group, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(x = "Cell Type", y = "Sex", fill = "Percent", title = "Heatmap of Cell Type Composition") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
