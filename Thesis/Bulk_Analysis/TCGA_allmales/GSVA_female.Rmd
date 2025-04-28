@@ -1,0 +1,538 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-11-06"
+---
+
+# Getting patients ID from GDC portal
+
+This data was downloaded on the 7th of March 2022 directly from the GDC portal. It comprises all the male patients from the TCGA projects that have more than 50 males registered. 
+
+```{r, eval=FALSE}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA_allmales/clinical")
+require(data.table)
+data<-as.data.frame(fread('clinical.tsv'))
+```
+
+Loading of package TCGAbiolink (download raw data)
+
+```{r, eval=FALSE}
+library (TCGAbiolinks)
+```
+
+
+Specification of data search, we store the specifications in query 
+Possible specifications (look in the GDC portal): GDCquery(
+  project,
+  data.category,
+  data.type,
+  workflow.type,
+  legacy = FALSE,
+  access,
+  platform,
+  file.type,
+  barcode,
+  data.format,
+  experimental.strategy,
+  sample.type
+)
+
+The data is splited in a list, each element having the dataset comprising the patients from each project:
+
+```{r, eval=FALSE}
+projects <- split(data, f = data$project_id)
+```
+
+The names of the projects are extracted from the names of the list:
+
+```{r, eval=FALSE}
+name_proj <- names(projects)
+```
+
+```{r}
+clinical_data_list <- list()
+for (proj in name_proj) {
+  # Define the query for clinical data
+  clinical_data <-  GDCquery_clinic(project = "TCGA-THYM", type = "clinical")
+  
+  # Store in list with project name as the key
+  clinical_data_list[["TCGA-THYM"]] <- clinical_data
+}
+```
+
+
+
+1. Retrieve Count Data for Both Males and Females
+
+The code below will first download count data across projects and then filter out female patients.
+
+```{r setup, include=FALSE}
+# Retrieve count data for each project
+x <- list()
+for (proj in name_proj) {
+  queryDown <- GDCquery(project = proj,
+                         data.category = "Transcriptome Profiling",
+                         data.type = "Gene Expression Quantification",
+                         workflow.type = "STAR - Counts",
+                         sample.type = "Primary Tumor")
+  
+  GDCdownload(queryDown)
+  
+  myfile <- paste0("counts_", proj, ".rda")
+  
+  HNSC_HTseqSE <- GDCprepare(queryDown, directory = "GDCdata", save = TRUE, save.filename = myfile)
+  x[[paste0(proj)]] <- as.data.frame(SummarizedExperiment::assay(HNSC_HTseqSE))
+}
+
+# Store as rdata
+list.save(x, '/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA_allmales/counts/TCGA_counts_all_patients.rdata')
+```
+
+```{r}
+# Filter female patients and save in a separate list
+female_counts <- list()
+for (proj in name_proj) {
+  TCGA_BLCA <- do.call(rbind.data.frame, x[proj])
+  # Get patient IDs for females
+  clinical <- do.call(rbind.data.frame, projects[proj])
+  female_ids <- clinical$case_submitter_id[clinical$gender == "Female"]
+  
+  # Filter for female patients only
+  female_counts[[paste0(proj)]] <- TCGA_BLCA[, colnames(TCGA_BLCA) %in% female_ids]
+}
+list.save(female_counts, 'TCGA_female_counts.rdata')
+```
+
+Loading of package TCGAbiolink (download raw data)
+
+```{r, eval=FALSE}
+library (TCGAbiolinks)
+```
+
+
+Specification of data search, we store the specifications in query 
+Possible specifications (look in the GDC portal): GDCquery(
+  project,
+  data.category,
+  data.type,
+  workflow.type,
+  legacy = FALSE,
+  access,
+  platform,
+  file.type,
+  barcode,
+  data.format,
+  experimental.strategy,
+  sample.type
+)
+
+The data is splited in a list, each element having the dataset comprising the patients from each project:
+
+```{r, eval=FALSE}
+projects <- split(data, f = data$project_id)
+```
+
+The names of the projects are extracted from the names of the list:
+
+```{r, eval=FALSE}
+name_proj <- names(projects)
+```
+
+```{r}
+txdb <- makeTxDbFromGFF("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA_allmales/clinical/gencode.v38.annotation.gtf")
+all.genes <- genes(txdb)
+```
+
+```{r}
+library(ensembldb)
+y <- list()
+for (proj in name_proj) {
+  TCGA_BLCA <- do.call(rbind.data.frame, x[proj])
+  
+  # Move rownames to a new column and clean up by removing the project name and anything after the first dot
+  
+  TCGA_BLCA$gene_id <- sapply(strsplit(rownames(TCGA_BLCA), "\\."), `[`, 2)
+
+  
+  # Aggregate to keep only the maximum values for duplicated gene IDs
+  TCGA_BLCA <- aggregate(. ~ gene_id, data = TCGA_BLCA, max)
+  
+  # Set the gene_id column as rownames and remove the gene_id column
+  rownames(TCGA_BLCA) <- TCGA_BLCA$gene_id
+  TCGA_BLCA <- TCGA_BLCA[ , -which(names(TCGA_BLCA) == "gene_id")]
+  
+  my.genes <- rownames(TCGA_BLCA)
+  exons.list.per.gene <- exonsBy(txdb,by="gene")
+  exonic.gene.sizes <- as.data.frame(sum(width(reduce(exons.list.per.gene))))
+  exonic.gene.sizes <- exonic.gene.sizes[my.genes,]
+  names(exonic.gene.sizes) <- my.genes
+  
+    tpm3 <- function(counts,len) {
+ 
+    x <- counts/len
+    x <- na.omit(x)
+  
+    return(t(t(x)*1e6/colSums(x)))
+ 
+    }
+    
+    TCGA_TPM <- as.data.frame(tpm3(as.matrix(TCGA_BLCA), exonic.gene.sizes))
+    
+  y[[paste0(proj)]] <- TCGA_TPM
+}
+
+save(y, file = 'TCGA_counts_all_patients__TPM.rdata')
+```
+
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA_allmales/clinical")
+require(data.table)
+data<-as.data.frame(fread('clinical.tsv'))
+projects <- split(data, f = data$project_id)
+name_proj <- names(projects)
+
+load("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA_allmales/TCGA_counts_all_patients__TPM.rdata")
+
+library(GenomicFeatures)
+library(ensembldb)
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+
+name_proj <- names(y)
+z <- list()
+for (proj in name_proj) {
+  TCGA_BLCA <- do.call(rbind.data.frame, y[proj])
+  rownames(TCGA_BLCA) <- sapply(strsplit(rownames(TCGA_BLCA), "\\."), `[`, 2)
+  
+  # Map IDs to symbols
+  TCGA_BLCA$symbol <- mapIds(org.Hs.eg.db,
+                             keys = rownames(TCGA_BLCA),
+                             column = "SYMBOL",
+                             keytype = "ENSEMBL",
+                             multiVals = "first")
+  
+  # Aggregate by symbol
+  symbol_count <- aggregate(. ~ symbol, data = TCGA_BLCA, max)
+  rownames(symbol_count) <- symbol_count$symbol
+  
+  # Remove the 'symbol' column
+  symbol_count <- symbol_count[ , -which(names(symbol_count) == "symbol")]
+  
+  # Store the processed data for the project
+  z[[paste0(proj)]] <- symbol_count
+}
+
+
+save(z, file = 'TCGA_counts_all_patients_symbol.rdata')
+```
+```{r}
+load("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA_allmales/clinical/TCGA_counts_all_patients_symbol.rdata")
+
+library(GSVA)
+library(GSEABase)
+library(GSVAdata)
+library(org.Hs.eg.db)
+
+# Define Y chromosome gene set
+Y_gene_set <- c("DDX3Y", "EIF1AY", "KDM5D", "NLGN4Y", "RPS4Y1", "SRY", "TBL1Y", "TMSB4Y", "USP9Y", "UTY", "ZFY")
+
+# GSVA scores for all patients
+name_proj <- names(z)
+gsva_scores <- list()
+for (proj in name_proj) {
+  TCGA_counts <- do.call(rbind.data.frame, z[proj])
+  gsva_res <- gsva((as.matrix(TCGA_counts)), list(Y_gene_set), method = "gsva", annotation = "org.Hs.eg.db", min.sz=5, max.sz=500, parallel.sz = 4, kcdf="Gaussian")
+  gsva_scores[[paste0(proj)]] <- gsva_res
+}
+list.save(gsva_scores, 'TCGA_GSVA_Y_chromosome_scores.rdata')
+```
+
+```{r}
+# Assuming your list of data frames is called 'data_list'
+column_names <- lapply(clinical_data_list, colnames)  # List of column names from each data frame
+common_columns <- Reduce(intersect, column_names)  # Find common columns
+clinical_data <- do.call(rbind, lapply(clinical_data_list, function(df) df[, common_columns, drop = FALSE]))
+saveRDS(clinical_data, "clinical_data.rds")
+```
+
+
+
+```{r}
+library(dplyr)
+load("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA_allmales/clinical/TCGA_onlymalemore50_clinicalndLoYstatus.rdata")
+# Step 1: Combine LoY status data for males across all cohorts
+male_clinical_data <- do.call(rbind, x)  # Assuming `list_of_male_clinical_data` is your list
+colnames(male_clinical_data)[colnames(male_clinical_data) == "case_submitter_id"] <- "submitter_id"
+
+# Step 2: Merge LoY status into the full clinical dataset
+# `full_clinical_data` is your main dataframe with all patients
+LoY_data <- clinical_data %>%
+  left_join(male_clinical_data %>% select(submitter_id, LoY), by = "submitter_id")
+```
+
+```{r}
+# First, crop patient names in the GSVA list to match `submitter_id`
+gsva_list <- lapply(gsva_scores, function(df) {
+  colnames(df) <- substr(colnames(df), 1, 12)
+  return(df)
+})
+
+gsva_df <- do.call(rbind, lapply(names(gsva_list), function(cohort) {
+  df <- as.data.frame(t(gsva_list[[cohort]])) # Transpose to make scores a column
+  colnames(df) <- "gsva_score" # Name the column for GSVA scores
+  df$submitter_id <- substr(colnames(gsva_list[[cohort]]), 1, 12) # Extract and crop patient names to 12 characters
+  df$cohort <- cohort # Add a cohort column
+  return(df)
+}))
+
+# Merge GSVA scores with the clinical dataframe
+merged_clinical <- merge(clinical_data, gsva_df, by = "submitter_id", all.x = TRUE)
+
+# Save the merged dataframe
+write.csv(merged_clinical, "merged_clinical_with_gsva.csv", row.names = FALSE)
+```
+
+```{r}
+library(ggplot2)
+
+# Create the violin plot
+plot <- ggplot(merged_clinical, aes(x = project, y = gsva_score, fill = gender)) +
+  geom_violin(trim = FALSE) +
+  scale_fill_manual(values = c("orange", "lightblue")) + # Customize colors as needed
+  theme_minimal() +
+  labs(
+    title = "GSVA Scores by Project and Gender",
+    x = "Project",
+    y = "GSVA Score",
+    fill = "Gender"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1), # Rotate x-axis labels for better readability
+    legend.position = "top"
+  )
+
+# Display the plot
+print(plot)
+
+# Save the plot as an image
+ggsave("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA_allmales/gsva_scores_by_project_and_gender.pdf", plot = plot, width = 12, height = 6, dpi = 300)
+```
+
+```{r}
+# Remove patients with NA values for gsva_score
+cleaned_clinical <- merged_clinical[!is.na(merged_clinical$gsva_score), ]
+
+# Initialize the EDY_status column as NA for the cleaned data
+cleaned_clinical$EDY_status <- NA
+
+# Loop through each project to assign EDY status for male patients
+projects <- unique(cleaned_clinical$project)
+
+for (proj in projects) {
+  # Subset data for the current project
+  proj_data <- subset(cleaned_clinical, project == proj)
+  
+  # Find the highest GSVA score for females in the current project
+  max_female_gsva <- max(proj_data$gsva_score[proj_data$gender == "female"], na.rm = TRUE)
+  
+  # Check if a valid max_female_gsva is found (not -Inf)
+  if (!is.infinite(max_female_gsva)) {
+    # Assign EDY status for male patients with valid GSVA scores
+    cleaned_clinical$EDY_status[cleaned_clinical$project == proj & 
+                                cleaned_clinical$gender == "male" & 
+                                cleaned_clinical$gsva_score < max_female_gsva] <- "Yes"
+    
+    cleaned_clinical$EDY_status[cleaned_clinical$project == proj & 
+                                cleaned_clinical$gender == "male" & 
+                                cleaned_clinical$gsva_score >= max_female_gsva] <- "No"
+  }
+}
+
+# Check the updated dataframe
+head(cleaned_clinical)
+```
+
+```{r}
+# Remove patients with NA values for gsva_score
+cleaned_clinical <- merged_clinical[!is.na(merged_clinical$gsva_score), ]
+
+# Initialize the EDY_status column as NA for the cleaned data
+cleaned_clinical$EDY_status <- NA
+
+# Loop through each project to assign EDY status for male patients
+projects <- unique(cleaned_clinical$project)
+
+for (proj in projects) {
+  # Subset data for the current project
+  proj_data <- subset(cleaned_clinical, project == proj)
+  
+  # Calculate the 95th percentile of GSVA scores for females in the current project
+  perc_95_female_gsva <- quantile(proj_data$gsva_score[proj_data$gender == "female"], 0.95, na.rm = TRUE)
+  
+  # Check if a valid 95th percentile value is found (not NA)
+  if (!is.na(perc_95_female_gsva)) {
+    # Assign EDY status for male patients with valid GSVA scores
+    cleaned_clinical$EDY_status[cleaned_clinical$project == proj & 
+                                cleaned_clinical$gender == "male" & 
+                                cleaned_clinical$gsva_score < perc_95_female_gsva] <- "Yes"
+    
+    cleaned_clinical$EDY_status[cleaned_clinical$project == proj & 
+                                cleaned_clinical$gender == "male" & 
+                                cleaned_clinical$gsva_score >= perc_95_female_gsva] <- "No"
+  }
+}
+```
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Filter the data to include only male patients
+male_data <- cleaned_clinical %>%
+  filter(gender == "male")
+
+# Calculate the percentage of EDY and non_EDY for each project
+edy_summary <- male_data %>%
+  group_by(project, EDY_status) %>%
+  summarise(count = n()) %>%
+  mutate(percentage = count / sum(count) * 100)
+
+# Plot the data
+plot <- ggplot(edy_summary, aes(x = project, y = percentage, fill = EDY_status)) +
+  geom_bar(stat = "identity", position = "stack") +
+  labs(title = "Percentage of EDY and Non-EDY Males per Project",
+       x = "Project",
+       y = "Percentage",
+       fill = "EDY Status") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Print the plot to ensure it's displayed in your R environment
+print(plot)
+
+# Save the plot to a file
+ggsave(filename = "EDY_Percentage_Per_Project.pdf", plot = plot, width = 10, height = 6, dpi = 300)
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Filter the data to include only male patients
+male_data <- cleaned_clinical %>%
+  filter(gender == "male")
+
+# Calculate the count of EDY and non_EDY for each project
+edy_summary <- male_data %>%
+  group_by(project, EDY_status) %>%
+  summarise(count = n())
+
+# Plot the data with counts
+ggplot(edy_summary, aes(x = project, y = count, fill = EDY_status)) +
+  geom_bar(stat = "identity", position = "stack") +
+  labs(title = "Number of EDY and Non-EDY Males per Project",
+       x = "Project",
+       y = "Number of Patients",
+       fill = "EDY Status") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Calculate the number of male and female patients per project
+gender_summary <- cleaned_clinical %>%
+  group_by(project, gender) %>%
+  summarise(count = n())
+
+# Plot the data
+plot_gender <- ggplot(gender_summary, aes(x = project, y = count, fill = gender)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_manual(values = c("female" = "orange", "male" = "lightblue")) + # Customize colors
+  labs(title = "Number of Male and Female Patients per Project",
+       x = "Project",
+       y = "Number of Patients",
+       fill = "Gender") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Print the plot to ensure it's displayed in your R environment
+print(plot_gender)
+
+# Save the plot to a file
+ggsave(filename = "Gender_Count_Per_Project.pdf", plot = plot_gender, width = 10, height = 6, dpi = 300)
+```
+```{r}
+library(dplyr)
+load("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA_allmales/clinical/TCGA_onlymalemore50_clinicalndLoYstatus.rdata")
+# Step 1: Combine LoY status data for males across all cohorts
+male_clinical_data <- do.call(rbind, x)  # Assuming `list_of_male_clinical_data` is your list
+colnames(male_clinical_data)[colnames(male_clinical_data) == "case_submitter_id"] <- "submitter_id"
+
+# Step 2: Merge LoY status into the full clinical dataset
+# `full_clinical_data` is your main dataframe with all patients
+LoY_data <- cleaned_clinical %>%
+  left_join(male_clinical_data %>% select(submitter_id, LoY), by = "submitter_id")
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Filter patients where both EDY_status and LoY are either "Yes" or "No"
+filtered_data <- LoY_data %>%
+  filter((EDY_status %in% c("Yes", "No")) & (LoY %in% c("Yes", "No")))
+
+# Update labels in the dataframe
+filtered_data$EDY_status <- ifelse(filtered_data$EDY_status == "Yes", "EDY", "Non-EDY")
+filtered_data$LoY_status <- ifelse(filtered_data$LoY == "Yes", "LoY", "Non-LoY")
+
+# Count the combinations of EDY_status and LoY
+combination_summary <- filtered_data %>%
+  group_by(EDY_status, LoY_status) %>%
+  summarise(count = n(), .groups = 'drop')
+
+# View the result
+print(combination_summary)
+
+# Plot the result
+plot <- ggplot(combination_summary, aes(x = EDY_status, y = count, fill = LoY_status)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Count of Patients by EDY Status and LoY",
+       x = "EDY Status",
+       y = "Number of Patients",
+       fill = "LoY Status") +
+  theme_minimal()
+
+# Display the plot
+print(plot)
+
+# Save the plot
+ggsave("EDY_LoY_count_plot.pdf", plot = plot, width = 10, height = 6, dpi = 300)
+```
+```{r}
+ggplot(combination_summary, aes(x = EDY_status, y = count, fill = LoY_status)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Stacked Bar Chart of EDY and LoY Status Combinations",
+       x = "EDY Status",
+       y = "Number of Patients",
+       fill = "LoY Status") +
+  theme_minimal()
+```
+
+```{r}
+library(ggmosaic)
+
+# Mosaic plot
+ggplot(filtered_data) +
+  geom_mosaic(aes(weight = 1, x = product(EDY_status), fill = LoY), na.rm = TRUE) +
+  labs(title = "Mosaic Plot of EDY Status and LoY Combinations",
+       x = "EDY Status",
+       fill = "LoY Status") +
+  theme_minimal()
+```
+

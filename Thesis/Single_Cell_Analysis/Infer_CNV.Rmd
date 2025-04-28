@@ -1,0 +1,732 @@
+---
+title: "InferCNV"
+output: html_document
+date: "2024-06-12"
+---
+
+```{r}
+metadata <- HNSC_fibroblast@meta.data
+```
+
+```{r}
+cellAnnotation <- data.frame(Sample = colnames(HNSC_fibroblast@assays$RNA), Cell = metadata$Cells_Tumor_Integration)
+write.table(cellAnnotation , "cellAnnotation.txt", quote = FALSE, row.names = FALSE, col.names = FALSE, sep = "\t")
+
+```
+
+```{r}
+HNSC_combined_Y <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_Y.rds")
+
+# Load the dplyr package
+library(dplyr)
+
+# Assuming 'data' is your dataset
+# You can use the mutate function from dplyr to create a new column
+HNSC_combined_Y@meta.data <- HNSC_combined_Y@meta.data %>%
+  mutate(Tumor_X0 = case_when(
+    Cells_Tumor == "Tumor" & pct_chrY == 0 ~ "Tumor_X0",
+    TRUE ~ Cells_Tumor
+  ))
+
+cellAnnotation <- data.frame(Sample = colnames(HNSC_combined_Y@assays$RNA), Cell = HNSC_combined_Y@meta.data$Tumor_X0)
+write.table(cellAnnotation , "cellAnnotation_X0.txt", quote = FALSE, row.names = FALSE, col.names = FALSE, sep = "\t")
+
+```
+
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q highmem
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=500GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(infercnv)
+library(Seurat)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV")
+output_dir_full= "output"
+
+HNSC_fibroblast <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_fibroblast.rds")
+
+as_matrix <- function(mat){
+
+  tmp <- matrix(data=0L, nrow = mat@Dim[1], ncol = mat@Dim[2])
+  
+  row_pos <- mat@i+1
+  col_pos <- findInterval(seq(mat@x)-1,mat@p[-1])+1
+  val <- mat@x
+    
+  for (i in seq_along(val)){
+      tmp[row_pos[i],col_pos[i]] <- val[i]
+  }
+    
+  row.names(tmp) <- mat@Dimnames[[1]]
+  colnames(tmp) <- mat@Dimnames[[2]]
+  return(tmp)
+}
+
+HNSC_matrix <- as_matrix(HNSC_fibroblast@assays$RNA@counts)
+rownames(HNSC_matrix) <- rownames(HNSC_fibroblast@assays$RNA)
+colnames(HNSC_matrix) <- colnames(HNSC_fibroblast@assays$RNA)
+
+# create the infercnv object
+infercnv_obj = CreateInfercnvObject(raw_counts_matrix=HNSC_matrix,
+                                    annotations_file="/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/cellAnnotation.txt",
+                                    delim="\t",
+                                    gene_order_file="/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/hg38_gencode_v27.txt",
+                                    ref_group_names=c("CD8T","CD4T","Macrophage","Multi","NK","Monocyte","panDC","Neutrophils","Mast","Bcell","Fibroblast","Endothelial","PlasmaCell","Epithelial"))
+
+# perform infercnv operations to reveal cnv signal
+infercnv_obj = infercnv::run(infercnv_obj,
+                             cutoff=0.1,  # use 1 for smart-seq, 0.1 for 10x-genomics
+                             out_dir="output_dir",  # dir is auto-created for storing outputs
+                             cluster_by_groups=T,   # cluster
+                             denoise=T,
+                             HMM=T
+                             )
+
+saveRDS(infercnv_obj, "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/infercnv_obj.rds")
+```
+
+To differenciate between X0 and non-X0 tumor cells
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q highmem
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=500GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(infercnv)
+library(Seurat)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/X0")
+output_dir_full= "output"
+
+HNSC_combined_Y <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_Y.rds")
+
+as_matrix <- function(mat){
+
+  tmp <- matrix(data=0L, nrow = mat@Dim[1], ncol = mat@Dim[2])
+  
+  row_pos <- mat@i+1
+  col_pos <- findInterval(seq(mat@x)-1,mat@p[-1])+1
+  val <- mat@x
+    
+  for (i in seq_along(val)){
+      tmp[row_pos[i],col_pos[i]] <- val[i]
+  }
+    
+  row.names(tmp) <- mat@Dimnames[[1]]
+  colnames(tmp) <- mat@Dimnames[[2]]
+  return(tmp)
+}
+
+HNSC_matrix <- as_matrix(HNSC_combined_Y@assays$RNA@counts)
+rownames(HNSC_matrix) <- rownames(HNSC_combined_Y@assays$RNA)
+colnames(HNSC_matrix) <- colnames(HNSC_combined_Y@assays$RNA)
+
+# create the infercnv object
+infercnv_obj = CreateInfercnvObject(raw_counts_matrix=HNSC_matrix,
+                                    annotations_file="/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/X0/cellAnnotation_X0.txt",
+                                    delim="\t",
+                                    gene_order_file="/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/hg38_gencode_v27.txt",
+                                    ref_group_names=c("CD8T","CD4T","Macrophage","Multi","NK","Monocyte","panDC","Neutrophils","Mast","Bcell","Fibroblast","Endothelial","PlasmaCell","Epithelial"))
+
+# perform infercnv operations to reveal cnv signal
+infercnv_obj = infercnv::run(infercnv_obj,
+                             cutoff=0.1,  # use 1 for smart-seq, 0.1 for 10x-genomics
+                             out_dir="output_dir",  # dir is auto-created for storing outputs
+                             cluster_by_groups=T,   # cluster
+                             denoise=T,
+                             HMM=T
+                             )
+
+saveRDS(infercnv_obj, "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/infercnv_obj.rds")
+```
+
+To differenciate between X0 and XY and also use integrated data:
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q highmem
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=500GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(infercnv)
+library(Seurat)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/Integrated")
+
+HNSC_combined_Y <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_Y.rds")
+
+# Assuming HNSC_combined_Y is a Seurat object and meta.data is a DataFrame within it
+HNSC_combined_Y@meta.data <- HNSC_combined_Y@meta.data %>%
+  mutate(Tumor_X0 = case_when(
+    Cells_Tumor == "Tumor" & Sex == "Female" ~ "Tumor_XX",
+    Cells_Tumor == "Tumor" & pct_chrY == 0 ~ "Tumor_X0",
+    TRUE ~ Cells_Tumor
+  ))
+
+
+as_matrix <- function(mat){
+
+  tmp <- matrix(data=0L, nrow = mat@Dim[1], ncol = mat@Dim[2])
+  
+  row_pos <- mat@i+1
+  col_pos <- findInterval(seq(mat@x)-1,mat@p[-1])+1
+  val <- mat@x
+    
+  for (i in seq_along(val)){
+      tmp[row_pos[i],col_pos[i]] <- val[i]
+  }
+    
+  row.names(tmp) <- mat@Dimnames[[1]]
+  colnames(tmp) <- mat@Dimnames[[2]]
+  return(tmp)
+}
+
+HNSC_matrix <- as_matrix(HNSC_combined_Y@assays$integrated@scale.data)
+rownames(HNSC_matrix) <- rownames(HNSC_combined_Y@assays$RNA)
+colnames(HNSC_matrix) <- colnames(HNSC_combined_Y@assays$RNA)
+
+# create the infercnv object
+infercnv_obj = CreateInfercnvObject(raw_counts_matrix=HNSC_matrix,
+                                    annotations_file="/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/X0/cellAnnotation_X0.txt",
+                                    delim="\t",
+                                    gene_order_file="/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/hg38_gencode_v27.txt",
+                                    ref_group_names=c("CD8T","CD4T","Macrophage","Multi","NK","Monocyte","panDC","Neutrophils","Mast","Bcell","Fibroblast","Endothelial","PlasmaCell","Epithelial"))
+
+# perform infercnv operations to reveal cnv signal
+infercnv_obj = infercnv::run(infercnv_obj,
+                             cutoff=0,  # for not preprocessing the data
+                             out_dir="output_dir",  # dir is auto-created for storing outputs
+                             cluster_by_groups=T,   # cluster
+                             denoise=T,
+                             HMM=T
+                             )
+
+saveRDS(infercnv_obj, "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/Integrated/infercnv_obj.rds")
+```
+
+```{r}
+library(dplyr)
+
+HNSC_combined_Y <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_Y.rds")
+
+# Assuming HNSC_combined_Y is a Seurat object and meta.data is a DataFrame within it
+HNSC_combined_Y@meta.data <- HNSC_combined_Y@meta.data %>%
+  mutate(Tumor_X0 = case_when(
+    Cells_Tumor == "Tumor" & Sex == "Female" ~ "Tumor_XX",
+    Cells_Tumor == "Tumor" & pct_chrY == 0 ~ "Tumor_X0",
+    TRUE ~ Cells_Tumor
+  ))
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q highmem
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=500GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(infercnv)
+library(Seurat)
+library(dplyr)
+
+as_matrix <- function(mat){
+
+  tmp <- matrix(data=0L, nrow = mat@Dim[1], ncol = mat@Dim[2])
+  
+  row_pos <- mat@i+1
+  col_pos <- findInterval(seq(mat@x)-1,mat@p[-1])+1
+  val <- mat@x
+    
+  for (i in seq_along(val)){
+      tmp[row_pos[i],col_pos[i]] <- val[i]
+  }
+    
+  row.names(tmp) <- mat@Dimnames[[1]]
+  colnames(tmp) <- mat@Dimnames[[2]]
+  return(tmp)
+}
+
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/Separated")
+
+HNSC_combined_Y <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_Y.rds")
+
+# Assuming HNSC_combined_Y is a Seurat object and meta.data is a DataFrame within it
+HNSC_combined_Y@meta.data <- HNSC_combined_Y@meta.data %>%
+  mutate(Tumor_X0 = case_when(
+    Cells_Tumor == "Tumor" & Sex == "Female" ~ "Tumor_XX",
+    Cells_Tumor == "Tumor" & pct_chrY == 0 ~ "Tumor_X0",
+    TRUE ~ Cells_Tumor
+  ))
+
+# Get unique dataset identifiers
+dataset_ids <- unique(HNSC_combined_Y@meta.data$Dataset)
+
+# Loop over each dataset identifier
+for (dataset_id in dataset_ids) {
+  # Subset the Seurat object by dataset
+  subset_data <- subset(HNSC_combined_Y, subset = Dataset == dataset_id)
+
+  # Generate annotation file
+  cellAnnotation <- data.frame(
+    Sample = colnames(subset_data@assays$RNA),
+    Cell = subset_data@meta.data$Tumor_X0
+  )
+  
+  # Specify the output path for annotation file
+  annotation_file_path <- paste0("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/Separated/cellAnnotation_", dataset_id, ".txt")
+  
+  # Write annotation file
+  write.table(cellAnnotation, annotation_file_path, quote = FALSE, row.names = FALSE, col.names = FALSE, sep = "\t")
+
+  # Convert the data to a matrix format for inferCNV
+  HNSC_matrix <- as_matrix(subset_data@assays$RNA@counts)
+  rownames(HNSC_matrix) <- rownames(subset_data@assays$RNA)
+  colnames(HNSC_matrix) <- colnames(subset_data@assays$RNA)
+
+  # Create the inferCNV object
+  infercnv_obj <- CreateInfercnvObject(
+    raw_counts_matrix = HNSC_matrix,
+    annotations_file = annotation_file_path,
+    delim = "\t",
+    gene_order_file = "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/hg38_gencode_v27.txt",
+    ref_group_names = c("CD8T", "CD4T", "Macrophage", "Multi", "NK", "Monocyte", "panDC", "Neutrophils", "Mast", "Bcell", "Fibroblast", "Endothelial", "PlasmaCell", "Epithelial")
+  )
+
+  # Perform inferCNV operations to reveal CNV signal
+  infercnv_obj <- infercnv::run(
+    infercnv_obj,
+    cutoff = 0.1, # Use appropriate cutoff
+    out_dir = paste0("output_dir_", dataset_id), # Ensure unique output directories
+    cluster_by_groups = TRUE,
+    denoise = TRUE,
+    HMM = TRUE
+  )
+
+  # Save the result for each dataset
+  saveRDS(infercnv_obj, paste0("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/Separated/infercnv_obj_", dataset_id, ".rds"))
+}
+```
+
+
+
+```{r}
+
+                     out_dir="."
+                     title="inferCNV"
+                     obs_title="Observations (Cells)"
+                     ref_title="References (Cells)"
+                     cluster_by_groups=TRUE
+                     cluster_references=TRUE
+                     plot_chr_scale=FALSE
+                     chr_lengths=NULL
+                     k_obs_groups = 1
+                     contig_cex=1
+                     x.center=mean(infercnv_obj@expr.data)
+                     x.range="auto" #NA,
+                     hclust_method='ward.D'
+                     custom_color_pal=NULL
+                     color_safe_pal=FALSE
+                     output_filename="infercnv"
+                     output_format="png" #pdf, png, NA
+                     png_res=300
+                     dynamic_resize=0
+                     ref_contig = NULL
+                     write_expr_matrix=FALSE
+                     write_phylo=FALSE
+                     useRaster=TRUE
+                     
+```
+
+
+```{r}
+library(infercnv)
+plot_cnv(infercnv_obj, cluster_references=F, cluster_by_groups = F, output_format = "pdf", write_expr_matrix = T)
+```
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q highmem
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=500GB]"
+#BSUB -J InferCNV_Cluster
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(infercnv)
+library(Seurat)
+library(dplyr)
+
+as_matrix <- function(mat){
+
+  tmp <- matrix(data=0L, nrow = mat@Dim[1], ncol = mat@Dim[2])
+  
+  row_pos <- mat@i+1
+  col_pos <- findInterval(seq(mat@x)-1,mat@p[-1])+1
+  val <- mat@x
+    
+  for (i in seq_along(val)){
+      tmp[row_pos[i],col_pos[i]] <- val[i]
+  }
+    
+  row.names(tmp) <- mat@Dimnames[[1]]
+  colnames(tmp) <- mat@Dimnames[[2]]
+  return(tmp)
+}
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/Separated_Cluster_Y")
+
+HNSC_combined_Y <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_Y.rds")
+
+# Assuming HNSC_combined_Y is a Seurat object and meta.data is a DataFrame within it
+
+HNSC_combined_Y <- subset(HNSC_combined_Y, subset = Cells_Tumor %in% c("Fibroblast", "Endothelial", "Epithelial", "Tumor"))
+
+HNSC_combined_Y@meta.data <- HNSC_combined_Y@meta.data %>%
+  mutate(Tumor_X0 = case_when(
+    Cells_Tumor %in% c("Fibroblast", "Endothelial", "Epithelial") ~ "Stromal",  
+    Cells_Tumor == "Tumor" & Sex == "Female" ~ "Tumor_XX",
+    Cells_Tumor == "Tumor" & pct_chrY == 0 ~ "Tumor_X0",
+    TRUE ~ Cells_Tumor
+  ))
+  
+HNSC_combined_Y <- subset(HNSC_combined_Y, subset = Tumor_X0 != is.na(Tumor_X0))  
+
+
+# Get unique dataset identifiers
+dataset_ids <- unique(HNSC_combined_Y@meta.data$Dataset)
+
+# Loop over each dataset identifier
+for (dataset_id in dataset_ids) {
+  # Subset the Seurat object by dataset
+  subset_data <- subset(HNSC_combined_Y, subset = Dataset == dataset_id)
+
+  # Generate annotation file
+  cellAnnotation <- data.frame(
+    Sample = colnames(subset_data@assays$RNA),
+    Cell = subset_data@meta.data$Tumor_X0
+  )
+  
+  # Specify the output path for annotation file
+  annotation_file_path <- paste0("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/Separated_Cluster_Y/cellAnnotation_", dataset_id, ".txt")
+  
+  # Write annotation file
+  write.table(cellAnnotation, annotation_file_path, quote = FALSE, row.names = FALSE, col.names = FALSE, sep = "\t")
+
+  # Convert the data to a matrix format for inferCNV
+  HNSC_matrix <- as_matrix(subset_data@assays$RNA@counts)
+  rownames(HNSC_matrix) <- rownames(subset_data@assays$RNA)
+  colnames(HNSC_matrix) <- colnames(subset_data@assays$RNA)
+
+  # Create the inferCNV object
+  infercnv_obj <- CreateInfercnvObject(
+    raw_counts_matrix = HNSC_matrix,
+    annotations_file = annotation_file_path,
+    delim = "\t",
+    gene_order_file = "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/hg38_gencode_v27.txt",
+    ref_group_names = c("Stromal"),
+    chr_exclude = NULL
+  )
+
+   # Perform inferCNV operations to reveal CNV signal
+   
+  infercnv_obj <- infercnv::run(
+    infercnv_obj,
+    cutoff = 0.1,
+    out_dir = paste0("output_dir_", dataset_id), 
+    cluster_by_groups = TRUE,
+    denoise = TRUE,
+    HMM = TRUE
+  )
+
+  # Save the result for each dataset
+  saveRDS(infercnv_obj, paste0("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/Separated_Cluster_Y/infercnv_obj_", dataset_id, ".rds"))
+}
+```
+
+For the atlas comparison:
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q highmem
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=500GB]"
+#BSUB -J S_InferCNV_Cluster
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(infercnv)
+library(Seurat)
+library(dplyr)
+
+as_matrix <- function(mat){
+
+  tmp <- matrix(data=0L, nrow = mat@Dim[1], ncol = mat@Dim[2])
+  
+  row_pos <- mat@i+1
+  col_pos <- findInterval(seq(mat@x)-1,mat@p[-1])+1
+  val <- mat@x
+    
+  for (i in seq_along(val)){
+      tmp[row_pos[i],col_pos[i]] <- val[i]
+  }
+    
+  row.names(tmp) <- mat@Dimnames[[1]]
+  colnames(tmp) <- mat@Dimnames[[2]]
+  return(tmp)
+}
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/Tumor_Atlas")
+
+HNSC_combined <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_stacas_scGate.rds")
+HNSC_combined@meta.data <- HNSC_combined@meta.data %>%
+  mutate(Cells_Tumor_Integration = if_else(Tumor.y == "Tumor", "Tumor", scGate_multi))
+
+HNSC_combined@meta.data <- HNSC_combined@meta.data %>%
+  mutate(
+    Combined_Category = case_when(
+      Cells == "Tumor" & Cells_Tumor_Integration == "Tumor" ~ "Tumor",
+      Cells == "Epithelial Cells" & Cells_Tumor_Integration == "Tumor" ~ "Epithelial_Tumor",
+      Cells_Tumor_Integration == "Epithelial" ~ "Epithelial",
+      TRUE ~ "Other" # Optionally, add a default case for anything else
+    )
+  )
+
+subset_data <- subset(HNSC_combined, subset = Combined_Category %in% c("Tumor", "Epithelial", "Epithelial_Tumor"))
+
+cellAnnotation <- data.frame(Sample = colnames(subset_data@assays$RNA), Cell = subset_data$Combined_Category)
+# Specify the output path for annotation file
+  annotation_file_path <- paste0("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/Tumor_Atlas/cellAnnotation_combined.txt")
+# Write annotation file
+    write.table(cellAnnotation, annotation_file_path, quote = FALSE, row.names = FALSE, col.names = FALSE, sep = "\t")
+
+  # Convert the data to a matrix format for inferCNV
+  HNSC_matrix <- as_matrix(subset_data@assays$RNA@counts)
+  rownames(HNSC_matrix) <- rownames(subset_data@assays$RNA)
+  colnames(HNSC_matrix) <- colnames(subset_data@assays$RNA)
+
+  # Create the inferCNV object
+  infercnv_obj <- CreateInfercnvObject(
+    raw_counts_matrix = HNSC_matrix,
+    annotations_file = annotation_file_path,
+    delim = "\t",
+    gene_order_file = "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/hg38_gencode_v27.txt",
+    ref_group_names = c("Epithelial"),
+    chr_exclude = NULL
+  )
+
+   # Perform inferCNV operations to reveal CNV signal
+   
+  infercnv_obj <- infercnv::run(
+    infercnv_obj,
+    cutoff = 0.1,
+    out_dir = paste0("output_dir_combined"), 
+    cluster_by_groups = TRUE,
+    denoise = TRUE,
+    HMM = TRUE
+  )
+
+  # Save the result for each dataset
+  saveRDS(infercnv_obj, paste0("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/Tumor_Atlas/infercnv_obj_combined.rds"))
+```
+
+
+
+
+```{r}
+HNSC_combined <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_stacas_scGate.rds")
+HNSC_combined_subset <- subset(HNSC_combined, subset = Cells %in% c("Tumor", "Epithelial Cells"))
+HNSC_combined_subset@meta.data <- HNSC_combined_subset@meta.data %>%
+  mutate(Tumor = if_else(Cells == "Tumor", "Tumor", "Normal"))
+cellAnnotation <- data.frame(Sample = colnames(HNSC_combined_subset@assays$RNA), Cell = HNSC_combined_subset$Tumor)
+write.table(cellAnnotation , "cellAnnotation_tumor.txt", quote = FALSE, row.names = FALSE, col.names = FALSE, sep = "\t")
+
+```
+
+```{r}
+library(Seurat)
+library(ggplot2)
+# Create a violin plot for CXCL12 and CXCR4
+VlnPlot(
+  object = HNSC_combined, 
+  features = c("CXCL12", "CXCR4"), 
+  group.by = "Cells_Tumor",  # Specify the column for grouping
+  pt.size = 0.1,       # Size of the jittered points
+  split.by = NULL      # Remove if you want further splitting by a metadata column
+)     # Optional: Apply a minimal theme# Add a title
+```
+```{r}
+# Create a ridge plot for CXCL12 and CXCR4
+RidgePlot(
+  object = HNSC_combined,
+  features = c("CXCL12", "CXCR4"),
+  assay = "RNA",
+  group.by = "Cells_Tumor"  # Specify the grouping variable (e.g., Tumor vs. Normal)
+)
+```
+```{r}
+# Ensure the RNA assay is active
+DefaultAssay(HNSC_combined) <- "RNA"
+
+# Extract the expression matrix for RNA
+rna_expression <- GetAssayData(HNSC_combined, slot = "data", assay = "RNA")
+
+# Check for CXCL12 expression
+if ("CXCL12" %in% rownames(rna_expression)) {
+  # Identify cells with CXCL12 expression > 0
+  cells_with_expression <- colnames(HNSC_combined)[rna_expression["CXCL12", ] > 0]
+  
+  # Subset metadata for these cells
+  metadata <- HNSC_combined@meta.data
+  cell_types_expressing_cxcl12 <- metadata %>%
+    filter(rownames(metadata) %in% cells_with_expression) %>%
+    group_by(Cells_Tumor) %>%
+    summarize(Count = n())
+  
+  # Print the results
+  print(cell_types_expressing_cxcl12)
+} else {
+  cat("CXCL12 is not found in the RNA assay.\n")
+}
+```
+```{r}
+HNSC_combined <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_Y.rds")
+HNSC_combined <- subset(HNSC_combined, subset = Chr_Dosage != "intermediate")
+DefaultAssay(HNSC_combined) <- "RNA"
+
+
+library(Seurat)
+library(ggplot2)
+
+# Create a violin plot for AR expression split by Chr_Dosage
+plot <- VlnPlot(
+  object = HNSC_combined, 
+  features = c("PTGS2"), 
+  group.by = "Cells_Tumor",  # Specify the column for grouping
+  split.by = "Chr_Dosage",  # Split by Chr_Dosage
+  pt.size = 0.1 # Size of the jittered points
+)                                           
+
+# Save the plot to a PDF
+output_file <- "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/PTGS2_expression_by_Cells_Tumor_and_Chr_Dosage.pdf"  # Set your desired file path
+ggsave(filename = output_file, plot = plot, width = 10, height = 6)
+```
+
+## Code for the run made with 4818 cells from each Epithelial/Epithelial-Tumor/Tumor for the atlas creation comparison of CNV between classifications
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q highmem
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=500GB]"
+#BSUB -J S_InferCNV_Cluster
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(infercnv)
+library(Seurat)
+library(dplyr)
+
+as_matrix <- function(mat){
+
+  tmp <- matrix(data=0L, nrow = mat@Dim[1], ncol = mat@Dim[2])
+  
+  row_pos <- mat@i+1
+  col_pos <- findInterval(seq(mat@x)-1,mat@p[-1])+1
+  val <- mat@x
+    
+  for (i in seq_along(val)){
+      tmp[row_pos[i],col_pos[i]] <- val[i]
+  }
+    
+  row.names(tmp) <- mat@Dimnames[[1]]
+  colnames(tmp) <- mat@Dimnames[[2]]
+  return(tmp)
+}
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/Tumor_Atlas")
+
+HNSC_combined <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_combined_stacas_scGate.rds")
+HNSC_combined@meta.data <- HNSC_combined@meta.data %>%
+  mutate(Cells_Tumor_Integration = if_else(Tumor.y == "Tumor", "Tumor", scGate_multi))
+
+HNSC_combined@meta.data <- HNSC_combined@meta.data %>%
+  mutate(
+    Combined_Category = case_when(
+      Cells == "Tumor" & Cells_Tumor_Integration == "Tumor" ~ "Tumor",
+      Cells == "Epithelial Cells" & Cells_Tumor_Integration == "Tumor" ~ "Epithelial_Tumor",
+      Cells_Tumor_Integration == "Epithelial" ~ "Epithelial",
+      TRUE ~ "Other" # Optionally, add a default case for anything else
+    )
+  )
+
+subset_data <- subset(HNSC_combined, subset = Combined_Category %in% c("Tumor", "Epithelial", "Epithelial_Tumor"))
+
+# Get the metadata for stratified sampling
+meta_data <- subset_data@meta.data
+
+# Define the number of cells to sample per group
+n_per_group <- 4818  # Adjust this number based on your total desired sample size and group counts
+
+# Perform stratified sampling
+set.seed(42)  # For reproducibility
+sampled_cells <- meta_data %>%
+  group_by(Combined_Category) %>%
+  sample_n(size = n_per_group, replace = FALSE) %>%
+  pull(Cell_Labels)
+
+# Subset the Seurat object with the sampled cells
+subset_data <- subset(subset_data, cells = sampled_cells)
+
+cellAnnotation <- data.frame(Sample = colnames(subset_data@assays$RNA), Cell = subset_data$Combined_Category)
+# Specify the output path for annotation file
+  annotation_file_path <- paste0("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/Tumor_Atlas/cellAnnotation_trial_4818.txt")
+# Write annotation file
+    write.table(cellAnnotation, annotation_file_path, quote = FALSE, row.names = FALSE, col.names = FALSE, sep = "\t")
+
+  # Convert the data to a matrix format for inferCNV
+  HNSC_matrix <- as_matrix(subset_data@assays$RNA@counts)
+  rownames(HNSC_matrix) <- rownames(subset_data@assays$RNA)
+  colnames(HNSC_matrix) <- colnames(subset_data@assays$RNA)
+
+
+  # Create the inferCNV object
+  infercnv_obj <- CreateInfercnvObject(
+    raw_counts_matrix = HNSC_matrix,
+    annotations_file = annotation_file_path,
+    delim = "\t",
+    gene_order_file = "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/hg38_gencode_v27.txt",
+    ref_group_names = c("Epithelial"),
+    chr_exclude = NULL
+  )
+
+   # Perform inferCNV operations to reveal CNV signal
+   
+  infercnv_obj <- infercnv::run(
+    infercnv_obj,
+    cutoff = 0.1,
+    out_dir = paste0("output_dir_trial4818"), 
+    cluster_by_groups = TRUE,
+    denoise = TRUE,
+    HMM = TRUE
+  )
+
+  # Save the result for each dataset
+  saveRDS(infercnv_obj, paste0("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/InferCNV/Tumor_Atlas/infercnv_obj_trial4818.rds"))
+```
+
+

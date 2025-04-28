@@ -1,0 +1,185 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-03-11"
+---
+
+```{r}
+TCGA_Masterfile_EDY_LoY_PQLoss <- read_csv("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA/EDY/TCGA_Masterfile_EDY_LoY_PQLoss.csv")
+```
+
+```{r}
+female <- TCGA_Masterfile_EDY_LoY_PQLoss[TCGA_Masterfile_EDY_LoY_PQLoss$Gender == "Female",]
+max(female$GSVA_score)
+female$Chr_Dosage <- c("XX")
+male <- TCGA_Masterfile_EDY_LoY_PQLoss[TCGA_Masterfile_EDY_LoY_PQLoss$Gender == "Male",]
+    p33 <- quantile(male$GSVA_score, probs = seq(0.33, 0.66))
+    p66 <- quantile(male$GSVA_score, probs = seq(0.66, 0.99))
+p33
+p66
+X0 <- male[male$GSVA_score < p33, ]
+X0$Chr_Dosage <- c("X0")
+XY <- male[male$GSVA_score > p66 , ]
+XY$Chr_Dosage <- c("XY")
+```
+
+```{r}
+final_selection <- rbind(X0,XY)
+final_selection <- rbind(final_selection, female)
+```
+
+```{r}
+cibersort_AB <- read_xlsx("TCGA_HNC_AB.xlsx")
+cibersort_AB$`Input Sample` <- gsub(".01", "", cibersort_AB$`Input Sample`)
+cibersort_AB$`Input Sample` <- gsub("-", ".", cibersort_AB$`Input Sample`)
+rownames <- cibersort_AB$`Input Sample`
+cibersort_AB <- cibersort_AB[,c(-1)]
+rownames(cibersort_AB) <- rownames
+cibersort_AB <- data.frame(t(cibersort_AB))
+cibersort_AB <- cibersort_AB[ , order(names(cibersort_AB))]
+```
+
+```{r}
+xCell_data <- read_xlsx("HNSCC_x_Cell.xlsx")
+```
+
+```{r}
+i <-  which(colnames(xCell_data) %in% final_selection$Patient_ID)
+j <-  which(final_selection$Patient_ID %in% colnames(xCell_data))
+
+MET_DAT <- final_selection[j,]
+xCell_data <- xCell_data[xCell_data$Cells %in% c("B-cells","Basophils","CD4+ memory T-cells", "CD4+ naive T-cells" ,"CD4+ T-cells","CD4+ Tcm" , "CD4+ Tem", "CD8+ naive T-cells","CD8+ T-cells", "CD8+ Tcm","CD8+ Tem","DC","Endothelial cells","Eosinophils","Epithelial cells","Fibroblasts", "Macrophages","Macrophages M1", "Macrophages M2", "Mast cells", "Memory B-cells" ,"Monocytes", "naive B-cells","Neutrophils", "NK cells", "NKT","pDC" ,"Pericytes" ,"Plasma cells", "pro B-cells", "Th1 cells","Th2 cells","Tregs"),]
+xCell_data_new <- xCell_data[,i]
+rownames(xCell_data_new) <- xCell_data$Cells
+
+i <-  which(colnames(cibersort_AB) %in% final_selection$Patient_ID)
+j <-  which(final_selection$Patient_ID %in% colnames(cibersort_AB))
+
+MET_DAT_A <- final_selection[j,]
+cibersort_AB_new <- cibersort_AB[,i]
+cibersort_AB_new <- cibersort_AB_new[!rownames(cibersort_AB_new) %in% c("CD274", "IFNG", "IRF1", "IRF9"),]
+
+```
+
+```{r}
+# Load necessary libraries
+library(tidyverse)
+library(ggpubr)
+
+# Define the output directory
+output_dir <- "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA/Immune_Y"
+
+score_data <- xCell_data_new
+metadata <- MET_DAT
+
+# Define a function to reshape, merge metadata, and plot
+plot_celltype_scores <- function(score_data, metadata, dataset_name) {
+  
+  # Ensure metadata has rownames matching the patient IDs
+  metadata <- data.frame(Patient_ID = metadata$Patient_ID, Chr_Dosage = metadata$Chr_Dosage)
+  rownames(metadata) <- metadata$Patient_ID
+  
+  # Convert wide data (cell types as rows, patients as columns) to long format
+  long_data <- score_data %>%
+    rownames_to_column(var = "Cell_Type") %>%
+    pivot_longer(-Cell_Type, names_to = "Patient_ID", values_to = "Score") %>%
+    left_join(metadata, by = "Patient_ID")  # Merge metadata (ensure patient matching)
+  
+  # Check the structure
+  print(head(long_data))
+
+  # Create a single grouped boxplot with smaller dots
+  p <- ggplot(long_data, aes(x = Cell_Type, y = Score, fill = Chr_Dosage)) +
+    geom_boxplot(position = position_dodge(0.8), alpha = 0.7, outlier.shape = NA) +  # Boxplot grouped by Chr_Dosage
+    stat_compare_means(aes(group = Chr_Dosage), method = "kruskal.test", label = "p.signif", size = 4, vjust = -0.5) + 
+    labs(title = paste("Cell Type Scores by Chr_Dosage in", dataset_name),
+         x = "Cell Type", y = "Score", fill = "Chr_Dosage") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  # Save the plot
+  plot_path <- file.path(output_dir, paste0("ChrDosage_", dataset_name, "_Boxplot.pdf"))
+  ggsave(plot_path, p, width = 10, height = 6, dpi = 300)
+  message("Plot saved to: ", plot_path)
+  
+  return(p)
+}
+
+# Generate boxplots for each dataset
+p1 <- plot_celltype_scores(cibersort_AB_new, MET_DAT_A, "CIBERSORT-AB")
+p2 <- plot_celltype_scores(xCell_data_new, MET_DAT, "xCell")
+
+# Print the plots
+print(p1)
+print(p2)
+```
+
+```{r}
+p1
+```
+
+
+```{r}
+# Define output path
+output_csv_path <- "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA/Immune_Y/xCell_long_data.csv"
+
+# Save xCell_data_new to CSV
+write.csv(long_data, output_csv_path, row.names = TRUE)
+```
+
+```{r}
+# Load necessary libraries
+library(tidyverse)
+
+# Function to analyze cell types, filter significant ones, and classify scores
+analyze_significant_cell_types <- function(data) {
+  
+  # Compute median scores for each Chr_Dosage group per cell type
+  median_scores <- data %>%
+    group_by(Cell_Type, Chr_Dosage) %>%
+    summarize(Median_Score = median(Score, na.rm = TRUE), .groups = "drop")
+  
+  # Perform Kruskal-Wallis test for each cell type
+  p_values <- data %>%
+    group_by(Cell_Type) %>%
+    summarise(p_value = list(kruskal.test(Score ~ Chr_Dosage)$p.value)) %>%
+    unnest(p_value)
+  
+  # Adjust p-values using Benjamini-Hochberg correction
+  p_values <- p_values %>%
+    mutate(adjusted_p_value = p.adjust(p_value, method = "fdr"))
+  
+  # Merge median scores and statistical results (long format)
+  result_table <- median_scores %>%
+    left_join(p_values, by = "Cell_Type") %>%
+    arrange(Cell_Type, Chr_Dosage)  # Ensure order is consistent
+
+  # Filter only significant cell types (p < 0.05)
+  significant_results <- result_table %>%
+    filter(p_value < 0.05)
+
+  # Determine "Up", "Down", or "Middle" labels
+  significant_results <- significant_results %>%
+    group_by(Cell_Type) %>%
+    mutate(Label = case_when(
+      Median_Score == max(Median_Score) ~ "Up",
+      Median_Score == min(Median_Score) ~ "Down",
+      TRUE ~ "Middle"
+    )) %>%
+    ungroup()
+
+  return(significant_results)
+}
+
+# Apply function to your dataset
+significant_table <- analyze_significant_cell_types(long_data)
+
+# Save results to CSV in long format
+output_path <- "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA/Immune_Y/Kruskal_Results_xCell_significant.csv"
+write.csv(significant_table, output_path, row.names = FALSE)
+```
+
+
+
+
+

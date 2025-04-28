@@ -1,0 +1,150 @@
+---
+title: "GSEA_Y_chromosome"
+author: "Cristina Conde Lopez"
+date: "2/7/2022"
+output: html_document
+---
+
+## Perform GSVA on the TPM data
+
+```{r}
+library(GSVA)
+library(GSEABase)
+library(GSVAdata)
+```
+
+```{r}
+GeneSetCollection <- getGmt("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA/EDY/genesignature_Y_chromosome.gmt")
+```
+
+```{r, warning=FALSE}
+library(readxl)
+TCGA_Masterfile <- read_excel("TCGA_MASTERFILE_clinical_data.xls")
+TCGA_Masterfile$Patient_ID <- gsub("-", ".", TCGA_Masterfile$Patient_ID)
+row.names(TCGA_Masterfile) <- TCGA_Masterfile$Patient_ID
+```
+
+```{r}
+TCGA_Masterfile_male <- TCGA_Masterfile[TCGA_Masterfile$Gender == "Male",]
+```
+
+```{r}
+GeneSetCollection <- getGmt("genesignature_Y_chromosome.gmt")
+```
+
+```{r}
+TPM_sym <- read.table("TCGA_TPM_symbol.txt")
+```
+
+```{r}
+TPM_male <- TPM_sym[,TCGA_Masterfile_male$Patient_ID]
+```
+
+```{r}
+TPM_male_mat <- as.matrix(TPM_male)
+```
+
+```{r}
+GSVA_TPM1 <- gsva((as.matrix(TPM_sym)), GeneSetCollection, method = "gsva", annotation = "org.Hs.eg.db", min.sz=5, max.sz=500, parallel.sz = 4, kcdf="Gaussian")
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=GSVA_TPM1
+  #clustering2 <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender)
+  rownames(annotation_col)=colnames(GSVA_TPM1)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, 
+           #cluster_cols = clustering2, cutree_cols = 3, 
+           cluster_rows = F)
+```
+
+```{r}
+TCGA_Masterfile$GSVA_score <- GSVA_TPM1[1,]
+```
+
+```{r}
+TCGA_female <- TCGA_Masterfile[TCGA_Masterfile$Gender == "Female",]
+```
+
+```{r}
+max(TCGA_female$GSVA_score)
+```
+
+```{r}
+TCGA_male <- TCGA_Masterfile[TCGA_Masterfile$Gender == "Male",]
+```
+
+```{r}
+x1<-rep(c(0),times=nrow(TCGA_male))
+```
+
+```{r}
+for (i in c(1:367)){
+  if(TCGA_male$GSVA_score[i] < -0.04645608){
+    x1[i] <- c("Yes")
+    } else {
+      x1[i] <- c("No")
+    }
+}
+```
+
+```{r}
+x1 
+```
+
+```{r}
+fem <-rep(c("female"),times=nrow(TCGA_Masterfile))
+```
+
+```{r}
+i <- which(TCGA_Masterfile$Patient_ID %in% TCGA_male$Patient_ID)
+```
+
+```{r}
+fem[i] <- x1
+```
+
+```{r}
+TCGA_Masterfile$EDY <- fem
+```
+
+```{r}
+fem <-rep(c("female"),times=nrow(TCGA_Masterfile))
+i <- which(TCGA_Masterfile$Patient_ID %in% male_ID$Patient_ID)
+fem[i] <- male_ID$P_Loss
+TCGA_Masterfile$P_Loss <- fem
+```
+
+```{r}
+fem <-rep(c("female"),times=nrow(TCGA_Masterfile))
+i <- which(TCGA_Masterfile$Patient_ID %in% male_ID$Patient_ID)
+fem[i] <- male_ID$Q_Loss
+TCGA_Masterfile$Q_Loss <- fem
+```
+
+```{r}
+fem <-rep(c("female"),times=nrow(TCGA_Masterfile))
+i <- which(TCGA_Masterfile$Patient_ID %in% TCGA_Metadata_Male_Ychr$Patient_ID)
+fem[i] <- TCGA_Metadata_Male_Ychr$LoY
+TCGA_Masterfile$LoY <- fem
+```
+
+```{r}
+TCGA_Masterfile$EDY_old <- TCGA_Masterfile_EDY_LOY$EDY
+```
+
+```{r}
+TCGA_Masterfile$EDY == TCGA_Masterfile$EDY_old
+```
+
+
+```{r}
+write.csv(TCGA_Masterfile, file = "/Volumes/LaCie/Gender_Analysis/Male/DEG_Analysis/Gender_COX2/TCGA_Masterfile_EDY_LOY.cvs")
+```
+
+```{r}
+write.csv(TCGA_Masterfile, file = "TCGA_Masterfile_EDY_LoY_PQLoss.cvs")
+```
+

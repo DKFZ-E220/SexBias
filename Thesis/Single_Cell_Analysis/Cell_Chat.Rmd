@@ -1,0 +1,597 @@
+ ---
+title: "Untitled"
+output: html_document
+date: "2024-04-09"
+---
+
+---
+title: "Untitled"
+output: html_document
+date: "2024-04-08"
+---
+
+```{r}
+HNSC_fibroblast <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_fibroblast.rds")
+rownames(HNSC_fibroblast@meta.data) <- HNSC_fibroblast$Cell_Labels
+file <- SplitObject(HNSC_fibroblast, split.by = "Chr_Dosage")
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q long
+#BSUB -W 10:00
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(Seurat)
+library(SeuratDisk)
+library(SeuratWrappers)
+library(UCell)
+library(NMF)
+
+HNSC_fibroblast <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_fibroblast.rds")
+rownames(HNSC_fibroblast@meta.data) <- HNSC_fibroblast$Cell_Labels
+HNSC_fibroblast <- subset(HNSC_fibroblast, subset = HPV == "HPV-")
+HNSC_fibroblast$Cells_Tumor_Integration[HNSC_fibroblast$Cells_Tumor_Integration == NA] <- c("Unknown")
+file <- SplitObject(HNSC_fibroblast, split.by = "Chr_Dosage")
+
+
+library(CellChat)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY")
+options(future.globals.maxSize = 8000 * 1024^2)
+for (i in file){
+ 
+meta <- i@meta.data
+data.input <- GetAssayData(i, assay = "RNA", slot = "data")
+cellchat <- createCellChat(object = data.input, meta = meta, group.by = "Cells_Tumor_Integration")
+CellChatDB <- CellChatDB.human # use CellChatDB.mouse if running on mouse data
+showDatabaseCategory(CellChatDB)
+#CellChatDB.use <- subsetDB(CellChatDB, search = "Secreted Signaling", key = "annotation") # use Secreted Signaling
+# use all CellChatDB for cell-cell communication analysis
+CellChatDB.use <- CellChatDB # simply use the default CellChatDB
+
+# set the used database in the object
+cellchat@DB <- CellChatDB.use
+cellchat <- subsetData(cellchat) # This step is necessary even if using the whole database
+#future::plan("multisession", workers = 4) # do parallel
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+
+# project gene expression data onto PPI (Optional: when running it, USER should set `raw.use = FALSE` in the function `computeCommunProb()` in order to use the projected data)
+cellchat <- projectData(cellchat, PPI.human)
+cellchat@idents = droplevels((cellchat@idents), exclude = setdiff(levels(cellchat@idents),unique(cellchat@idents)))
+
+# 5. Compute the communication probability and infer cellular communication network
+cellchat <- computeCommunProb(cellchat, raw.use = FALSE) 
+
+# 6. Filter out the cell-cell communication min.cells = 10
+cellchat <- filterCommunication(cellchat, min.cells = 10)
+
+# 7. Infer the cell-cell communication at a signaling pathway level
+cellchat <- computeCommunProbPathway(cellchat)
+
+# 8. Calculate the aggregated cell-cell communication network
+cellchat <- aggregateNet(cellchat)
+
+# 9. Compute the network centrality scores
+cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
+
+# 10. Identify and visualize outgoing communication pattern of secreting cells
+#selectK(cellchat, pattern = "outgoing") 
+#nPatterns = 3
+#cellchat <- identifyCommunicationPatterns(cellchat, pattern = "outgoing",
+                                      #k = nPatterns, width = 5, height = 9)
+
+# 11. Identify and visualize incoming communication pattern of target cells
+#selectK(cellchat, pattern = "incoming")
+#nPatterns = 3
+#cellchat <- identifyCommunicationPatterns(cellchat,pattern = "incoming", 
+                                      #k = nPatterns, width = 5, height = 9)
+
+# 12. Identify signaling groups based on functional similarity
+#cellchat <- computeNetSimilarity(cellchat, type = "functional")
+#cellchat <- netEmbedding(cellchat, type = "functional")
+#cellchat <- netClustering (cellchat, type = "functional", do.parallel = FALSE)
+
+# 13. Identify signaling groups based on structure similarity
+#cellchat <- computeNetSimilarity(cellchat, type = "structural")
+#cellchat <- netEmbedding(cellchat, type = "structural")
+#cellchat <- netClustering(cellchat, type = "structural", do.parallel = FALSE)
+
+# 14. Save NL cellchat object
+name <- paste0("HPVng_", unique(i$Chr_Dosage), ".rds")
+saveRDS(cellchat, file=name)
+}
+
+```
+
+
+```{r}
+library(CellChat)
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY")
+
+files <- list.files(path = c("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY"), pattern = "^HPVng_.*\\.rds$", full.names = TRUE) # Ensure it only lists .rds files
+
+# Initialize an empty list to store cellchat objects
+cellchats <- list()
+
+for (i in files) {
+  # Extract the base name without the extension for use as the list key
+  name <- gsub("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY/HPVng_", "", i)
+  name <- gsub(".rds", "", name)
+  
+  # Read the RDS file
+  cellchat <- readRDS(i)
+  cellchat<- subsetCellChat(cellchat, idents.use = c("Bcell","CD4T","CD8T","Endothelial","Epithelial","Fibroblast","Macrophage","Mast","Monocyte","Multi","Neutrophils","NK","panDC","PlasmaCell","Tumor"))
+  
+  # Store the cellchat object in the list under the derived name
+  cellchats[[name]] <- cellchat
+}
+```
+
+```{r}
+X0_XX <- list(cellchats[[1]], cellchats[[2]])
+names(X0_XX) <- c("X0", "XX")
+X0_XY <- list(cellchats[[1]], cellchats[[3]])
+names(X0_XY) <- c("X0", "XY")
+XX_XY <- list(cellchats[[2]], cellchats[[3]])
+names(XX_XY) <- c("XX", "XY")
+```
+
+```{r}
+X0_XX_cellchat <- mergeCellChat(X0_XX, add.names = names(X0_XX))
+X0_XY_cellchat <- mergeCellChat(X0_XY, add.names = names(X0_XY))
+XX_XY_cellchat <- mergeCellChat(XX_XY, add.names = names(XX_XY))
+```
+
+```{r}
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(X0_XX_cellchat, weight.scale = T)
+netVisual_diffInteraction(X0_XX_cellchat, weight.scale = T, measure = "weight")
+```
+```{r}
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(X0_XY_cellchat, weight.scale = T)
+netVisual_diffInteraction(X0_XY_cellchat, weight.scale = T, measure = "weight")
+```
+```{r}
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(XX_XY_cellchat, weight.scale = T)
+netVisual_diffInteraction(XX_XY_cellchat, weight.scale = T, measure = "weight", title.name = "XX vs XY")
+```
+```{r}
+#pdf(file= c("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY/netVisual_DifferentialStrenght.pdf"))
+par(mfrow=c(1, 3))
+netVisual_diffInteraction(X0_XX_cellchat, weight.scale = T, measure = "weight", title.name = "X0 vs XX")
+netVisual_diffInteraction(X0_XY_cellchat, weight.scale = T, measure = "weight", title.name = "X0 vs XY")
+netVisual_diffInteraction(XX_XY_cellchat, weight.scale = T, measure = "weight", title.name = "XX vs XY")
+#dev.off()
+```
+
+```{r}
+gg1 <- netVisual_heatmap(X0_XX_cellchat, measure = "weight", title.name = "X0 vs XX")
+gg2 <- netVisual_heatmap(X0_XY_cellchat, measure = "weight", title.name = "X0 vs XY")
+gg3 <- netVisual_heatmap(XX_XY_cellchat, measure = "weight", title.name = "XX vs XY")
+gg1+gg2+gg3
+```
+
+
+```{r}
+atlas_fibroblast_groups <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_fibroblast.rds")
+atlas_fibroblast_groups$Cells_Fibroblast[is.na(atlas_fibroblast_groups$Cells_Fibroblast)] <- c("Unknown")
+atlas_fibroblast_groups$Cells_Fibroblast[atlas_fibroblast_groups$Cells_Fibroblast == "pericyte"] <- c("Pericyte")
+rownames(atlas_fibroblast_groups@meta.data) <- atlas_fibroblast_groups$Cell_Labels
+atlas_fibroblast_groups <- subset(atlas_fibroblast_groups, subset = HPV == "HPV-")
+```
+
+```{r}
+DefaultAssay(atlas_fibroblast_groups) <- "integrated"
+VlnPlot(atlas_fibroblast_groups, features = c("PTGS2"), group.by = "Cells_Tumor_Integration", split.by = "Chr_Dosage", pt.size = 0.3)
+```
+
+```{r}
+DefaultAssay(atlas_fibroblast_groups) <- "integrated"
+VlnPlot(atlas_fibroblast_groups, features = c("AR"), group.by = "Cells_Tumor_Integration", split.by = "Chr_Dosage", pt.size = 0.3)
+```
+
+```{r}
+rownames(atlas_fibroblast_groups@meta.data) <- atlas_fibroblast_groups$Cell_Labels 
+fibroblast <- subset(atlas_fibroblast_groups, subset = Cells_Tumor_Integration == "Fibroblast")
+```
+
+
+```{r}
+DefaultAssay(fibroblast) <- "integrated"
+VlnPlot(fibroblast, features = c("AR"), group.by = "Fibroblast.y", split.by = "Chr_Dosage", pt.size = 0.3)
+```
+
+## For fibroblast labels
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q long
+#BSUB -W 10:00
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(Seurat)
+library(SeuratDisk)
+library(SeuratWrappers)
+library(UCell)
+library(NMF)
+
+HNSC_fibroblast <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_fibroblast.rds")
+rownames(HNSC_fibroblast@meta.data) <- HNSC_fibroblast$Cell_Labels
+HNSC_fibroblast <- subset(HNSC_fibroblast, subset = HPV == "HPV-")
+HNSC_fibroblast$Cells_Fibroblast[is.na(HNSC_fibroblast$Cells_Fibroblast)] <- c("Unknown")
+HNSC_fibroblast$Cells_Fibroblast[HNSC_fibroblast$Cells_Fibroblast == "pericyte"] <- c("Pericyte")
+file <- SplitObject(HNSC_fibroblast, split.by = "Chr_Dosage")
+
+
+library(CellChat)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY_Fibroblast")
+options(future.globals.maxSize = 8000 * 1024^2)
+for (i in file){
+ 
+meta <- i@meta.data
+data.input <- GetAssayData(i, assay = "RNA", slot = "data")
+cellchat <- createCellChat(object = data.input, meta = meta, group.by = "Cells_Fibroblast")
+CellChatDB <- CellChatDB.human # use CellChatDB.mouse if running on mouse data
+showDatabaseCategory(CellChatDB)
+#CellChatDB.use <- subsetDB(CellChatDB, search = "Secreted Signaling", key = "annotation") # use Secreted Signaling
+# use all CellChatDB for cell-cell communication analysis
+CellChatDB.use <- CellChatDB # simply use the default CellChatDB
+
+# set the used database in the object
+cellchat@DB <- CellChatDB.use
+cellchat <- subsetData(cellchat) # This step is necessary even if using the whole database
+#future::plan("multisession", workers = 4) # do parallel
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+
+# project gene expression data onto PPI (Optional: when running it, USER should set `raw.use = FALSE` in the function `computeCommunProb()` in order to use the projected data)
+cellchat <- projectData(cellchat, PPI.human)
+cellchat@idents = droplevels((cellchat@idents), exclude = setdiff(levels(cellchat@idents),unique(cellchat@idents)))
+
+# 5. Compute the communication probability and infer cellular communication network
+cellchat <- computeCommunProb(cellchat, raw.use = FALSE) 
+
+# 6. Filter out the cell-cell communication min.cells = 10
+cellchat <- filterCommunication(cellchat, min.cells = 10)
+
+# 7. Infer the cell-cell communication at a signaling pathway level
+cellchat <- computeCommunProbPathway(cellchat)
+
+# 8. Calculate the aggregated cell-cell communication network
+cellchat <- aggregateNet(cellchat)
+
+# 9. Compute the network centrality scores
+cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
+
+# 10. Identify and visualize outgoing communication pattern of secreting cells
+#selectK(cellchat, pattern = "outgoing") 
+#nPatterns = 3
+#cellchat <- identifyCommunicationPatterns(cellchat, pattern = "outgoing",
+                                      #k = nPatterns, width = 5, height = 9)
+
+# 11. Identify and visualize incoming communication pattern of target cells
+#selectK(cellchat, pattern = "incoming")
+#nPatterns = 3
+#cellchat <- identifyCommunicationPatterns(cellchat,pattern = "incoming", 
+                                      #k = nPatterns, width = 5, height = 9)
+
+# 12. Identify signaling groups based on functional similarity
+#cellchat <- computeNetSimilarity(cellchat, type = "functional")
+#cellchat <- netEmbedding(cellchat, type = "functional")
+#cellchat <- netClustering (cellchat, type = "functional", do.parallel = FALSE)
+
+# 13. Identify signaling groups based on structure similarity
+#cellchat <- computeNetSimilarity(cellchat, type = "structural")
+#cellchat <- netEmbedding(cellchat, type = "structural")
+#cellchat <- netClustering(cellchat, type = "structural", do.parallel = FALSE)
+
+# 14. Save NL cellchat object
+name <- paste0("HPVng_fibr_", unique(i$Chr_Dosage), ".rds")
+saveRDS(cellchat, file=name)
+}
+```
+
+```{r}
+library(CellChat)
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY_Fibroblast")
+
+files <- list.files(path = c("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY_Fibroblast"), pattern = "^HPVng_fibr_.*\\.rds$", full.names = TRUE) # Ensure it only lists .rds files
+
+# Initialize an empty list to store cellchat objects
+cellchats <- list()
+
+for (i in files) {
+  # Extract the base name without the extension for use as the list key
+  name <- gsub("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY/HPVng_fibr_", "", i)
+  name <- gsub(".rds", "", name)
+  
+  # Read the RDS file
+  cellchat <- readRDS(i)
+  cellchat<- subsetCellChat(cellchat, idents.use = c("CD8T","Tumor","CD4T","Macrophage","Multi","NK","Monocyte","panDC","Neutrophils","Mast","Bcell","mCAF","tpCAF","Endothelial","PlasmaCell","Epithelial","IDO_CAF","iCAF","apCAF","Pericyte","rCAF+apCAF","vCAF","rCAF","Fibroblast","pericyte","dCAF"))
+  
+  # Store the cellchat object in the list under the derived name
+  cellchats[[name]] <- cellchat
+}
+```
+```{r}
+X0_XX <- list(cellchats[[1]], cellchats[[2]])
+names(X0_XX) <- c("X0", "XX")
+X0_XY <- list(cellchats[[1]], cellchats[[3]])
+names(X0_XY) <- c("X0", "XY")
+XX_XY <- list(cellchats[[2]], cellchats[[3]])
+names(XX_XY) <- c("XX", "XY")
+```
+
+```{r}
+X0_XX_cellchat <- mergeCellChat(X0_XX, add.names = names(X0_XX))
+X0_XY_cellchat <- mergeCellChat(X0_XY, add.names = names(X0_XY))
+XX_XY_cellchat <- mergeCellChat(XX_XY, add.names = names(XX_XY))
+```
+
+```{r}
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(X0_XX_cellchat, weight.scale = T)
+netVisual_diffInteraction(X0_XX_cellchat, weight.scale = T, measure = "weight")
+```
+```{r}
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(X0_XY_cellchat, weight.scale = T)
+netVisual_diffInteraction(X0_XY_cellchat, weight.scale = T, measure = "weight")
+```
+```{r}
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(XX_XY_cellchat, weight.scale = T)
+netVisual_diffInteraction(XX_XY_cellchat, weight.scale = T, measure = "weight", title.name = "XX vs XY")
+```
+```{r}
+#pdf(file= c("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY/netVisual_DifferentialStrenght.pdf"))
+par(mfrow=c(1, 3))
+netVisual_diffInteraction(X0_XX_cellchat, weight.scale = T, measure = "weight", title.name = "X0 vs XX")
+netVisual_diffInteraction(X0_XY_cellchat, weight.scale = T, measure = "weight", title.name = "X0 vs XY")
+netVisual_diffInteraction(XX_XY_cellchat, weight.scale = T, measure = "weight", title.name = "XX vs XY")
+#dev.off()
+```
+
+```{r}
+#pdf(file= c("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY/heatmap_fibroblast.pdf"), width = 12, height = 6)
+gg1 <- netVisual_heatmap(X0_XX_cellchat, measure = "weight", title.name = "X0 vs XX")
+gg2 <- netVisual_heatmap(X0_XY_cellchat, measure = "weight", title.name = "X0 vs XY")
+gg3 <- netVisual_heatmap(XX_XY_cellchat, measure = "weight", title.name = "XX vs XY")
+gg1+gg2+gg3
+#dev.off()
+```
+
+```{r}
+groupSize <- as.numeric(table(cellchats[[3]]@idents))
+netVisual_circle(cellchats[[3]]@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+```
+
+```{r}
+pdf(file= c("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY/celltype_streght.pdf"), width = 12, height = 6)
+mat <- cellchats[[3]]@net$weight
+par(mfrow = c(2,2), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+  mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+dev.off()
+```
+```{r}
+pdf(file= c("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY/celltype_streght_heatmap.pdf"), width = 12, height = 6)
+gg1 <- netVisual_heatmap(cellchats[[1]], measure = "weight", signaling = NULL, color.heatmap = "Reds", title.name = "X0")
+gg2 <- netVisual_heatmap(cellchats[[2]], measure = "weight", signaling = NULL, color.heatmap = "Reds", title.name = "XX")
+gg3 <- netVisual_heatmap(cellchats[[3]], measure = "weight", signaling = NULL, color.heatmap = "Reds", title.name = "XY")
+gg1+gg2+gg3
+dev.off()
+```
+
+```{r}
+library(CellChat)
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY_Fibroblast")
+
+files <- list.files(path = c("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY_Fibroblast"), pattern = "^HPVng_fibr_.*\\.rds$", full.names = TRUE) # Ensure it only lists .rds files
+
+# Initialize an empty list to store cellchat objects
+cellchats <- list()
+
+for (i in files) {
+  # Extract the base name without the extension for use as the list key
+  name <- gsub("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY/HPVng_fibr_", "", i)
+  name <- gsub(".rds", "", name)
+  
+  # Read the RDS file
+  cellchat <- readRDS(i)
+  cellchat<- subsetCellChat(cellchat, idents.use = c("Tumor","mCAF","tpCAF","IDO_CAF","iCAF","apCAF","Pericyte","rCAF+apCAF","vCAF","rCAF","pericyte","dCAF"))
+  
+  # Store the cellchat object in the list under the derived name
+  cellchats[[name]] <- cellchat
+}
+```
+
+
+
+```{r}
+for (i in (1:length(cellchats))){
+cellchats[[i]] <- netAnalysis_computeCentrality(cellchats[[i]], slot.name = "netP") # the slot 'netP' means the inferred intercellular communication
+}
+```
+```{r}
+names(cellchats) <- c("X0", "XX", "XY")
+```
+
+
+```{r}
+cellchat<- subsetCellChat(cellchat, idents.use = c("CD8T","Tumor","CD4T","Macrophage","Multi","NK","Monocyte","panDC","Neutrophils","Mast","Bcell","mCAF","tpCAF","Endothelial","PlasmaCell","Epithelial","IDO_CAF","iCAF","apCAF","Pericyte","rCAF+apCAF","vCAF","rCAF","Fibroblast","pericyte","dCAF"))
+```
+
+
+```{r}
+netVisual_bubble(cellchats[[3]], sources.use = 9, targets.use = c(2,3,4,6,7,11,12,14,16,17,18,21,25), remove.isolate = T, thresh = 0.01)
+```
+```{r}
+netVisual_bubble(XX_XY_cellchat, comparison= c(1,2), sources.use = 9, targets.use = c(2,3,4,6,7,11,12,14,16,17,18,21,25), remove.isolate = T, thresh = 0.01)
+```
+```{r}
+netVisual_bubble(XX_XY_cellchat, comparison= c(1,2), sources.use = 9, targets.use = c(24), remove.isolate = T, thresh = 0.01)
+```
+
+```{r}
+gg1 <- netVisual_bubble(X0_XX_cellchat, sources.use = 9, targets.use = c(25),  comparison = c(1, 2), max.dataset = 2, title.name = "Increased signaling in XX", angle.x = 45, remove.isolate = T)
+#> Comparing communications on a merged object
+gg2 <- netVisual_bubble(X0_XX_cellchat, sources.use = 9, targets.use = c(25),  comparison = c(1, 2), max.dataset = 1, title.name = "Decreased signaling in X0", angle.x = 45, remove.isolate = T)
+#> Comparing communications on a merged object
+gg1 + gg2
+```
+
+
+```{r}
+netAnalysis_diffNet(XX_XY_cellchat)
+plotDiffNet(XX_XY_cellchat, type = "circle")
+```
+
+```{r}
+names <- names(cellchats)
+name <- gsub("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY_Fibroblast/HPVng_fibr_", "", names)
+names(cellchats) <- name
+```
+
+```{r}
+pathways.show <- c("TGFb") 
+par(mfrow = c(1,2), xpd=TRUE)
+ht <- list()
+for (i in 1:length(cellchats)) {
+  ht[[i]] <- netVisual_heatmap(cellchats[[i]], signaling = pathways.show, color.heatmap = "Reds",title.name = paste(pathways.show, "signaling ",names(cellchats)[i]))
+}
+#> Do heatmap based on a single object 
+#> 
+#> Do heatmap based on a single object
+ComplexHeatmap::draw(ht[[1]] + ht[[2]] + ht[[3]], ht_gap = unit(0.5, "cm"))
+```
+
+```{r}
+# define a positive dataset, i.e., the dataset with positive fold change against the other dataset
+pos.dataset = "XY"
+# define a char name used for storing the results of differential expression analysis
+features.name = paste0(pos.dataset, ".merged")
+
+# perform differential expression analysis 
+# Of note, compared to CellChat version < v2, CellChat v2 now performs an ultra-fast Wilcoxon test using the presto package, which gives smaller values of logFC. Thus we here set a smaller value of thresh.fc compared to the original one (thresh.fc = 0.1). Users can also provide a vector and dataframe of customized DEGs by modifying the cellchat@var.features$LS.merged and cellchat@var.features$LS.merged.info. 
+
+XX_XY_cellchat <- identifyOverExpressedGenes(XX_XY_cellchat, group.dataset = "datasets", pos.dataset = pos.dataset, features.name = features.name, only.pos = FALSE, thresh.pc = 0.1, thresh.fc = 0.05,thresh.p = 0.05, group.DE.combined = FALSE) 
+#> Use the joint cell labels from the merged CellChat object
+
+# map the results of differential expression analysis onto the inferred cell-cell communications to easily manage/subset the ligand-receptor pairs of interest
+net <- netMappingDEG(XX_XY_cellchat, features.name = features.name, variable.all = TRUE)
+# extract the ligand-receptor pairs with upregulated ligands in LS
+net.up <- subsetCommunication(XX_XY_cellchat, net = net, datasets = "XY",ligand.logFC = 0.05, receptor.logFC = NULL)
+# extract the ligand-receptor pairs with upregulated ligands and upregulated receptors in NL, i.e.,downregulated in LS
+net.down <- subsetCommunication(XX_XY_cellchat, net = net, datasets = "XX",ligand.logFC = -0.05, receptor.logFC = NULL)
+```
+
+```{r}
+pairLR.use.up = net.up[, "interaction_name", drop = F]
+gg1 <- netVisual_bubble(XX_XY_cellchat, pairLR.use = pairLR.use.up, sources.use = c(24), targets.use = c(9), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Up-regulated signaling in XY", names(XX_XY_cellchat)[2]))
+#> Comparing communications on a merged object
+pairLR.use.down = net.down[, "interaction_name", drop = F]
+gg2 <- netVisual_bubble(XX_XY_cellchat, pairLR.use = pairLR.use.down, sources.use = c(24), targets.use = c(9), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Down-regulated signaling in XY", names(XX_XY_cellchat)[2]))
+#> Comparing communications on a merged object
+gg1 + gg2
+```
+
+```{r}
+mCAF<- subset(net.up, subset = (target == c("mCAF")))
+mCAF <- subset(mCAF, subset = (source == c("Tumor")))
+unique(mCAF$pathway_name)
+```
+```{r}
+mCAFdown<- subset(net.down, subset = (target == c("mCAF")))
+mCAFdown <- subset(mCAFdown, subset = (source == c("Tumor")))
+unique(mCAFdown$pathway_name)
+```
+
+```{r}
+pairLR.use.up = mCAF[, "interaction_name", drop = F]
+gg1 <- netVisual_bubble(XX_XY_cellchat, pairLR.use = pairLR.use.up, sources.use = c(24), targets.use = c(13), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Up-regulated signaling in XY", names(XX_XY_cellchat)[2]))
+#> Comparing communications on a merged object
+pairLR.use.down = mCAFdown[, "interaction_name", drop = F]
+gg2 <- netVisual_bubble(XX_XY_cellchat, pairLR.use = pairLR.use.down, sources.use = c(24), targets.use = c(13), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Down-regulated signaling in XY", names(XX_XY_cellchat)[2]))
+#> Comparing communications on a merged object
+gg1 + gg2
+```
+
+
+```{r}
+iCAF <- subset(net.up, subset = (target == c("iCAF")))
+iCAF <- subset(iCAF, subset = (source == c("Tumor")))
+unique(iCAF$pathway_name)
+```
+
+```{r}
+iCAFdown<- subset(net.down, subset = (target == c("iCAF")))
+iCAFdown <- subset(iCAFdown, subset = (source == c("Tumor")))
+unique(iCAFdown$pathway_name)
+```
+```{r}
+pairLR.use.up = iCAF[, "interaction_name", drop = F]
+gg1 <- netVisual_bubble(XX_XY_cellchat, pairLR.use = pairLR.use.up, sources.use = c(24), targets.use = c(9), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Up-regulated signaling in XY", names(XX_XY_cellchat)[2]))
+#> Comparing communications on a merged object
+pairLR.use.down = iCAFdown[, "interaction_name", drop = F]
+gg2 <- netVisual_bubble(XX_XY_cellchat, pairLR.use = pairLR.use.down, sources.use = c(24), targets.use = c(9), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Down-regulated signaling in XY", names(XX_XY_cellchat)[2]))
+#> Comparing communications on a merged object
+gg1 + gg2
+```
+
+
+```{r}
+library(GSVA)
+library(GSEABase)
+library(GSVAdata)
+
+GeneSetCollection <- getGmt("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HALLMARK_IL6_JAK_STAT3_SIGNALING.v2023.2.Hs.gmt")
+signatures <- list(JAK_STAT3 = geneIds(GeneSetCollection)[[1]], TGFbeta = geneIds(GeneSetCollection)[[2]])
+```
+
+```{r}
+library(Seurat)
+library(UCell)
+
+HNSC_fibroblast <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_fibroblast.rds")
+DefaultAssay(HNSC_fibroblast) <- "RNA"
+HNSC_fibroblast <- AddModuleScore_UCell(HNSC_fibroblast, features = signatures)
+```
+
+```{r}
+signature.names <- paste0(names(signatures), "_UCell")
+VlnPlot(HNSC_fibroblast_UCell, features = signature.names, group.by = "Cells_Fibroblast", split.by = "Chr_Dosage")
+```
+
+```{r}
+selectK(cellchats[[1]], pattern = "outgoing")
+nPatterns = 3
+cellchats[[1]] <- identifyCommunicationPatterns(cellchats[[1]], pattern = "outgoing", k = nPatterns)
+```
+
+```{r}
+netAnalysis_river(cellchats[[1]], pattern = "outgoing")
+```
+
+```{r}
+netAnalysis_dot(cellchats[[1]], pattern = "outgoing", group.show = c("Tumor"))
+```
+
+
+

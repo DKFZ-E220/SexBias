@@ -1,0 +1,912 @@
+---
+title: "Differential Expression Analysis Gender"
+subtitle: "Exploration of Y chromosome Expression in Different Subgroups"
+author: "Cristina Conde Lopez"
+date: "`r Sys.Date()`"
+output: 
+ prettydoc::html_pretty:
+    toc: true
+    theme: hpstr
+    highlight: github
+    number_sections: true
+ pdf_document:
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+---
+
+# Obtaining the Data 
+
+## Raw Counts with ENSMBL ID
+
+Downloaded from the GDC using TCGABiolinks on the 2nd of December 2022:
+
+```{r}
+Counts <- read.csv("TCGA_counts.csv")
+rownames(Counts) <- Counts$X
+Counts <- Counts[,c(-1)]
+```
+
+We also upload the TPM data obtained for this counts:
+
+```{r}
+TPM_sym <- read.table("TCGA_TPM_symbol.txt", sep = "\t")
+```
+
+
+## Patient Metadata
+
+This data was obtained on the 7th of October downloaded directly from the GDC portal: 
+```{r, warning=FALSE}
+library(readxl)
+TCGA_Masterfile <- read_excel("TCGA_MASTERFILE_clinical_data.xls")
+TCGA_Masterfile$Patient_ID <- gsub("-", ".", TCGA_Masterfile$Patient_ID)
+row.names(TCGA_Masterfile) <- TCGA_Masterfile$Patient_ID
+```
+
+We upload the male patient metadata with the information of LoY and EDY previously obtained.
+
+```{r}
+TCGA_Masterfile_male <- read.table("TCGA_Metadata_Male_Ychr.txt", sep = "\t")
+colnames(TCGA_Masterfile_male) <- TCGA_Masterfile_male[1,]
+TCGA_Masterfile_male <- TCGA_Masterfile_male[-1,]
+rownames(TCGA_Masterfile_male) <- TCGA_Masterfile_male$Patient_ID
+```
+
+# Differential Expression Analysis
+
+## DEG with DESeq2
+
+We create a DESeq object that can be read with the DESeq function:
+
+```{r, message=FALSE}
+library(DESeq2)
+Counts = round(Counts)
+colData <- data.frame(row.names=colnames(Counts), 
+                         Gender=TCGA_Masterfile$Gender)
+dds <- DESeqDataSetFromMatrix(countData = Counts,
+                                colData = colData,
+                                design = ~ Gender)
+```
+
+We apply the DESeq function:
+
+```{r, message=FALSE, warning=FALSE}
+dds <- DESeq(dds)
+```
+
+```{r, message=FALSE}
+res <- results(dds, 
+                 contrast=c("Gender","Male","Female"))
+  resOrdered <- res[order(res$padj),]
+  head(resOrdered)
+  DEG =as.data.frame(resOrdered)
+  DESeq2_DEG = na.omit(DEG)
+```
+
+```{r}
+nrDEG=DESeq2_DEG[,c(2,6)]
+colnames(nrDEG)=c('log2FoldChange','pvalue')  
+```
+
+https://github.com/jmzeng1314/tcga_example/blob/master/functions.R
+
+```{r}
+#draw_h_v(Counts,nrDEG,'DEseq2',TCGA_Masterfile$Gender,1)
+```
+
+<p align="center" width="100%">
+    <img width="100%" src="DEseq2_need_DEG_top50_heatmap.png"> <br>
+    **Figure 1:** Top50 differential expressed genes
+</p>
+
+<p align="center" width="100%">
+    <img width="100%" src="DEseq2_DEG_top50_pca.png"> <br>
+    **Figure 2:** PCA 
+</p>
+
+<p align="center" width="100%">
+    <img width="100%" src="DEseq2_volcano.png"> <br>
+    **Figure 3:** Volcano plot
+</p>
+
+## DEG with edgeR
+
+```{r, message=FALSE}
+library(edgeR)
+```
+
+```{r}
+d <- DGEList(counts=Counts,group=factor(TCGA_Masterfile$Gender))
+  keep <- rowSums(cpm(d)>1) >= 2
+  table(keep)
+  d <- d[keep, , keep.lib.sizes=FALSE]
+  d$samples$lib.size <- colSums(d$counts)
+  d <- calcNormFactors(d)
+  dge=d
+  design <- model.matrix(~0+factor(TCGA_Masterfile$Gender))
+  rownames(design)<-colnames(dge)
+  colnames(design)<-levels(factor(TCGA_Masterfile$Gender))
+  dge=d
+  dge <- estimateGLMCommonDisp(dge,design)
+  dge <- estimateGLMTrendedDisp(dge, design)
+  dge <- estimateGLMTagwiseDisp(dge, design)
+```
+
+```{r}
+fit <- glmFit(dge, design)
+my.contrast <- makeContrasts(
+    Male_vs_Female=Male-Female,
+    levels=design)
+  # https://www.biostars.org/p/110861/
+  lrt <- glmLRT(fit,  contrast=my.contrast) 
+  nrDEG=topTags(lrt, n=nrow(dge))
+  nrDEG=as.data.frame(nrDEG)
+  head(nrDEG)
+  edgeR_DEG =nrDEG 
+  nrDEG=edgeR_DEG[,c(1,5)]
+  colnames(nrDEG)=c('log2FoldChange','pvalue') 
+```
+
+```{r}
+#draw_h_v(Counts,nrDEG,'edgeR',TCGA_Masterfile$Gender,1)
+```
+
+<p align="center" width="100%">
+    <img width="100%" src="edgeR_need_DEG_top50_heatmap.png"> <br>
+    **Figure 4:** Top50 differential expressed genes
+</p>
+
+<p align="center" width="100%">
+    <img width="100%" src="edgeR_DEG_top50_pca.png"> <br>
+    **Figure 5:** PCA 
+</p>
+
+<p align="center" width="100%">
+    <img width="100%" src="edgeR_volcano.png"> <br>
+    **Figure 6:** Volcano plot
+</p>
+
+## DEG with Limma-Voom
+
+```{r}
+design <- model.matrix(~0+factor(TCGA_Masterfile$Gender))
+  colnames(design)=levels(factor(TCGA_Masterfile$Gender))
+  rownames(design)=colnames(Counts)
+```
+
+```{r}
+dge <- DGEList(counts=Counts)
+  dge <- calcNormFactors(dge)
+  logCPM <- cpm(dge, log=TRUE, prior.count=3)
+```
+
+```{r}
+v <- voom(dge,design,plot=TRUE, normalize="quantile")
+  fit <- lmFit(v, design)
+```
+
+```{r}
+  cont.matrix=makeContrasts(contrasts=c('Male-Female'),levels = design)
+  fit2=contrasts.fit(fit,cont.matrix)
+  fit2=eBayes(fit2)
+```
+
+```{r}
+tempOutput = topTable(fit2, coef='Male-Female', n=Inf)
+  DEG_limma_voom = na.omit(tempOutput)
+  head(DEG_limma_voom)
+  nrDEG=DEG_limma_voom[,c(1,4)]
+  colnames(nrDEG)=c('log2FoldChange','pvalue') 
+```
+
+```{r}
+#draw_h_v(Counts,nrDEG,'limma',TCGA_Masterfile$Gender,1)
+```
+
+<p align="center" width="100%">
+    <img width="100%" src="limma_need_DEG_top50_heatmap.png"> <br>
+    **Figure 7:** Top50 differential expressed genes
+</p>
+
+<p align="center" width="100%">
+    <img width="100%" src="limma_DEG_top50_pca.png"> <br>
+    **Figure 8:** PCA 
+</p>
+
+<p align="center" width="100%">
+    <img width="100%" src="limma_volcano.png"> <br>
+    **Figure 9:** Volcano plot
+</p>
+
+# Combination of the 3 analysis
+
+First we extract all the *log2FoldChange* and *pvalues* for the different DEG analysis:
+
+```{r}
+nrDEG1=DEG_limma_voom[,c(1,4)]
+colnames(nrDEG1)=c('log2FoldChange','pvalue') 
+```
+
+```{r}
+nrDEG2=edgeR_DEG[,c(1,5)]
+colnames(nrDEG2)=c('log2FoldChange','pvalue') 
+```
+
+```{r}
+nrDEG3=DESeq2_DEG[,c(2,6)]
+colnames(nrDEG3)=c('log2FoldChange','pvalue') 
+```
+
+We extract the genes with a *p-value* lower that 0.05 and a *log2FoldChange* higher than 1, this are the genes upregulated in the males vs. females:
+
+```{r}
+limma_sig <- nrDEG1[nrDEG1[,2] <= 0.05 & nrDEG1[,1] >= 1,]
+edgeR_sig <- nrDEG2[nrDEG2[,2] <= 0.05 & nrDEG2[,1] >= 1,]
+DESeq_sig <- nrDEG3[nrDEG3[,2] <= 0.05 & nrDEG3[,1] >= 1,]
+```
+
+We create a list with the names of the genes:
+
+```{r}
+genes <- list(rownames(limma_sig), rownames(edgeR_sig), rownames(DESeq_sig))
+```
+
+## Selection of Overlapping Genes between the different analysis
+
+With this list we create a Venn Diagram:
+
+```{r, message=FALSE}
+library(VennDiagram)
+library(scales)
+```
+
+```{r, message=FALSE}
+venn.diagram(
+  x = genes,
+  category.names = c("Limma" , "EdgeR" , "DESeq"),
+  filename = '#14_venn_diagramm.png',
+  output=TRUE, 
+  imagetype="png" ,
+          height = 480 , 
+          width = 480 , 
+          resolution = 300,
+          compression = "lzw",
+          lwd = 1,
+          col=c("#440154ff", '#21908dff', '#fde725ff'),
+          fill = c(alpha("#440154ff",0.3), alpha('#21908dff',0.3), alpha('#fde725ff',0.3)),
+          cex = 0.5,
+          fontfamily = "sans",
+          cat.cex = 0.3,
+          cat.default.pos = "outer",
+          cat.pos = c(-27, 27, 180),
+          cat.dist = c(0.055, 0.055, 0.085),
+          cat.fontfamily = "sans",
+          cat.col = c("#440154ff", '#21908dff', '#fde725ff'),
+          rotation = 1
+)
+```
+
+<p align="center" width="100%">
+    <img width="100%" src="diagramm.png"> <br>
+    **Figure 10:** VennDiagram overlapping upregulated genes for 3 different DEG analysis
+</p>
+
+We extract the names of the overlapping genes for the 3 analysis:
+
+```{r}
+ol = calculate.overlap(x = genes)
+names(ol) <- c("a123", "a12", "a13", "a23", "a1", "a2", "a3")
+overlaping_genes <- ol$a123
+```
+
+## Representation of the DEGs
+
+We represent the genes in a heatmap:
+
+```{r}
+ library(pheatmap)
+  choose_matrix=Counts[overlaping_genes,]
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender)
+  rownames(annotation_col)=colnames(Counts)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col,
+           #filename = 'Overlaping_genes_expression.png'
+           )
+  
+```
+
+We can see a clear clustering of the genders due to this DE genes, there's a particular zone which is clearly defining this clustering. We can extract the Symbol for this genes so it's easier to understand the heatmap. For this we are going to use the annotation tools of the biomaRt package:
+
+# Exploration of the DEG, search of relevant information
+
+https://cran.r-project.org/web/packages/biomartr/vignettes/Functional_Annotation.html
+
+```{r, message=FALSE}
+library(biomaRt)
+
+human = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+#We can list the different annotation attributes 
+#listAttributes(human)
+```
+
+```{r}
+res_human <- getBM(attributes = c("ensembl_gene_id", "external_gene_name", "description","chromosome_name", "gene_biotype" ), filters    = "ensembl_gene_id", values = overlaping_genes, mart = human)
+```
+
+```{r, message=FALSE}
+library(org.Hs.eg.db)
+```
+
+```{r}
+anno_sig_gene <- mapIds(org.Hs.eg.db,
+                     keys= overlaping_genes,
+                     column=c("SYMBOL"),
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+
+```{r}
+anno_sig_gene <- as.data.frame(na.omit(anno_sig_gene))
+```
+
+```{r}
+colnames(anno_sig_gene) <- c("Symbol")
+```
+
+
+```{r}
+Counts_symbol <- Counts[rownames(anno_sig_gene),]
+rownames(Counts_symbol) <- anno_sig_gene$Symbol
+```
+
+With these new names we represent again the heatmap:
+
+```{r}
+ library(pheatmap)
+  choose_matrix=Counts_symbol
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))  
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender)
+  rownames(annotation_col)=colnames(Counts_symbol)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col,
+           filename = 'Overlaping_genes_expression_genename.png'
+           )
+  
+```
+
+From the gene names we can glimpse that the genes that are defining the cluster the most belong to the Y chromosome. This makes sense since females don't have a Y chromosome, we can select (using the annotations made previously) the genes from this DEG that belong to the Y chromosome and visualize them in the heatmap.
+
+```{r}
+TPM_mal <- TPM_sym[anno_sig_gene$Symbol,]
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TPM_mal
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender)
+  rownames(annotation_col)=colnames(TPM_mal)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col,
+           #filename = 'Overlaping_genes_expression_genename.png'
+           )
+  
+```
+
+## Genes in the Y chromosome, differential expression (not only for women?!)
+
+```{r}
+res_human_y <- res_human[res_human$chromosome_name == "Y",]
+```
+
+```{r}
+Counts_y <- Counts[res_human_y$ensembl_gene_id,]
+```
+
+```{r}
+simbol_y <- mapIds(org.Hs.eg.db,
+                     keys= rownames(Counts_y),
+                     column=c("SYMBOL"),
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+
+```{r}
+simbol_y <- as.data.frame(na.omit(simbol_y))
+```
+
+```{r}
+Counts_y <- Counts[rownames(simbol_y),]
+```
+
+```{r}
+rownames(Counts_y) <- simbol_y$`na.omit(simbol_y)`
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=Counts_y
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender, Location = TCGA_Masterfile$Subsite, HPV = TCGA_Masterfile$HPV, OS = TCGA_Masterfile$OS_5y_event )
+  rownames(annotation_col)=colnames(Counts_y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, 
+           #filename = 'Overlaping_genes_expression_Y.png'
+           )
+  
+```
+
+In this heatmap we can visualize that there are males that clearly have a lower expression of the Y chromosome than others, there're even males that have the same expression of the Y chromosome as women do so they're clustering with them. If we cluster the patients into 3 groups we can see this:
+
+```{r}
+ library(pheatmap)
+  choose_matrix=Counts_y
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  clustering <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender, Location = TCGA_Masterfile$Subsite, HPV = TCGA_Masterfile$HPV, OS = TCGA_Masterfile$OS_5y_event )
+  rownames(annotation_col)=colnames(Counts_y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, cluster_cols = clustering, cutree_cols = 3 
+           ,filename = 'Overlaping_genes_expression_Y.png'
+           )
+  
+```
+
+Since it's normal that females don't have expression of the Y chromosome we're going to take them out of the data and represent it only for the males, now we can include the information for LoY and EDY previously obtained:
+
+```{r}
+Counts_male <- Counts_y[,TCGA_Masterfile_male$Patient_ID]
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=Counts_male
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile_male$Gender, OS = TCGA_Masterfile_male$OS_5y_event, LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY)
+  rownames(annotation_col)=colnames(Counts_male)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col 
+           #filename = 'Overlaping_genes_expression_male_Y_EDY_LOY.png'
+           )
+  
+```
+
+This heatmap is not really well represented since we're using raw data, we can use the TPM normalized data for this cohort so there's a better representation.
+
+```{r}
+TPM_sym_difex <- TPM_sym[simbol_y$`na.omit(simbol_y)`,]
+TPM_sym_difex <- TPM_sym_difex[, TCGA_Masterfile_male$Patient_ID]
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TPM_sym_difex
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  #clustering2 <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile_male$Gender, OS = TCGA_Masterfile_male$OS_5y_event, LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY, Y_expression = TCGA_Masterfile_male$Y_expression)
+  rownames(annotation_col)=colnames(TPM_sym_difex)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col
+           #, cluster_cols = clustering2, cutree_cols = 3, 
+           #filename = 'Overlaping_genes_expression_male_YTPM.png'
+           )
+  
+```
+
+Here we can see 3 groups clearly differenciated in the expression of the Y chromosome, we can cluster this groups:
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TPM_sym_difex
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))
+  clustering <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile_male$Gender, OS = TCGA_Masterfile_male$OS_5y_event
+                              , LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY
+                              )
+  rownames(annotation_col)=colnames(TPM_sym_difex)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col
+           , cluster_cols = clustering, cutree_cols = 3
+           #,filename = 'Overlaping_genes_expression_male_YTPM.png'
+           )
+  
+```
+
+We can plot the 5 year overall survival (OS) of this groups to see if the expression of the Y chromosome is making a difference:
+
+1. We introduce the data in the Patient Metadata table:
+
+```{r}
+t1 <- cutree(clustering, 3)
+TCGA_Masterfile_male$Y_expres <- factor(t1, levels = c(1,2,3), labels = c("Low", "Very_Low", "High"))
+```
+
+2. We check by size we have named the groups correctly
+
+```{r}
+table(TCGA_Masterfile_male$Y_expres)
+```
+
+3. We plot the survival curve based on the groups:
+
+```{r}
+TCGA_Masterfile_male <- transform(TCGA_Masterfile_male, OS_5y_months = as.numeric(OS_5y_months))
+```
+
+```{r, message=FALSE}
+library(survival)
+library(survminer)
+surv_object0 <- Surv(time = TCGA_Masterfile_male$OS_5y_months, event = as.double(TCGA_Masterfile_male$OS_5y_event))
+```
+
+```{r}
+fit00 <- survfit(surv_object0 ~ Y_expres, data = TCGA_Masterfile_male)
+```
+
+```{r}
+ggsurvplot(fit00, data = TCGA_Masterfile_male, pval = TRUE, title = "OS 5 year event")
+```
+
+We can see clearly that the groups with lower expression of the Y chromosome have an worse OS than those with higher values.
+
+This grouping was made with all the genes obtained from the DEG, no matter if they are protein coding or not, we can see their attributes in the following table:
+
+```{r}
+rmarkdown::paged_table(res_human_y) 
+```
+
+We can now select only the protein coding ones and cluster them:
+
+```{r}
+prot_cod <- res_human_y[res_human_y$gene_biotype == "protein_coding",]
+```
+
+```{r}
+simbol_y <- mapIds(org.Hs.eg.db,
+                     keys= prot_cod$ensembl_gene_id,
+                     column=c("SYMBOL"),
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+
+```{r}
+TPM_coding_Y <- TPM_sym[simbol_y,]
+TPM_coding_Y <- na.omit(TPM_coding_Y[,TCGA_Masterfile_male$Patient_ID])
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TPM_coding_Y
+  #choose_matrix[1:4,1:4]
+  choose_matrix=rescale(t(scale(t(log2(choose_matrix+1)))), to=c(-4,4))
+  clustering <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile_male$Gender, OS = TCGA_Masterfile_male$OS_5y_event, LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY)
+  rownames(annotation_col)=colnames(TPM_coding_Y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, cluster_cols = clustering, cutree_cols = 3 
+           #,filename = 'Overlaping_genes_expression_male_YTPM_protcod.png'
+           )
+```
+
+This grouping seems to be better since none of the cases of LoY or EDY group to the high expression group.
+
+We can plot the 5 year overall survival (OS) of this groups to see if the expression of the Y chromosome is making a difference:
+
+1. We introduce the data in the Patient Metadata table:
+
+```{r}
+t1 <- cutree(clustering, 3)
+TCGA_Masterfile_male$Y_expres <- factor(t1, levels = c(1,2,3), labels = c("Low", "Very_Low", "High"))
+```
+
+2. We check by size we have named the groups correctly
+
+```{r}
+table(TCGA_Masterfile_male$Y_expres)
+```
+
+3. We plot the survival curve based on the groups:
+
+```{r}
+TCGA_Masterfile_male <- transform(TCGA_Masterfile_male, OS_5y_months = as.numeric(OS_5y_months))
+```
+
+```{r, message=FALSE}
+library(survival)
+library(survminer)
+surv_object0 <- Surv(time = TCGA_Masterfile_male$OS_5y_months, event = as.double(TCGA_Masterfile_male$OS_5y_event))
+```
+
+```{r}
+fit00 <- survfit(surv_object0 ~ Y_expres, data = TCGA_Masterfile_male)
+```
+
+```{r}
+ggsurvplot(fit00, data = TCGA_Masterfile_male, pval = TRUE, title = "OS 5 year event")
+```
+
+We can see that OS of the different groups is still significant. This concludes that the expression of this genes (and proteins) have some type of relevance in the progression of the cancer.
+
+# Is this Gene Set the best?
+
+We can also come at this from a different approach, since this Gene Set was decided from an analysis including females this can bias the GeneSet. To see if this hypothesis is true we can take all the Y chromosome genes with an expression above 0 and see how this "more complete" gene set behaves.
+
+```{r, message=FALSE}
+library(tidyverse)
+library(EDY)
+chrY_genes <- EDY::chrY.genes$hgnc_symbol
+```
+
+```{r}
+i <- which(rownames(TPM_sym) %in% chrY_genes )
+```
+
+
+```{r}
+TPM_Ychr <- na.omit(TPM_sym[i,])
+```
+
+```{r}
+median <- as.data.frame(rowMedians(as.matrix(TPM_Ychr)))
+median <- cbind(median, rownames(TPM_Ychr))
+colnames(median) <- c("Median", "Symbol")
+```
+
+```{r}
+nrow(median)
+keep <- median$Median > 0
+median <- as.data.frame(median[keep,])
+nrow(median)
+```
+
+Here we have a list of the genes that present a median expression value over all the patients that is above 0:
+
+```{r}
+rmarkdown::paged_table(median) 
+```
+
+We can take this genes and represent them:
+
+```{r}
+TPM_Y <- TPM_sym[median$Symbol,]
+TPM_Y <- TPM_Y[,TCGA_Masterfile_male$Patient_ID]
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TPM_Y
+  #choose_matrix[1:4,1:4]
+  choose_matrix=rescale(t(scale(t(log2(choose_matrix+1)))), to=c(-4,4))
+  clustering <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile_male$Gender, OS = TCGA_Masterfile_male$OS_5y_event, LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY)
+  rownames(annotation_col)=colnames(TPM_Y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, cluster_cols = clustering, cutree_cols = 3
+           #, filename = 'Overlaping_genes_expression_male_YTPM_protcod.png'
+           )
+```
+
+We can see that all the genes present in the previous analysis are included in this GeneSet and that almost all of them are clustering together, to see thing more clearly we can plot only the  protein coding genes and see how the data behaves.
+
+We can plot the 5 year overall survival (OS) of this groups to see if the expression of the Y chromosome is making a difference:
+
+1. We introduce the data in the Patient Metadata table:
+
+```{r}
+t1 <- cutree(clustering, 3)
+TCGA_Masterfile_male$Y_expres <- factor(t1, levels = c(1,2,3), labels = c("Very_Low", "Low", "High"))
+```
+
+2. We check by size we have named the groups correctly
+
+```{r}
+table(TCGA_Masterfile_male$Y_expres)
+```
+
+3. We plot the survival curve based on the groups:
+
+```{r}
+TCGA_Masterfile_male <- transform(TCGA_Masterfile_male, OS_5y_months = as.numeric(OS_5y_months))
+```
+
+```{r}
+library(survival)
+library(survminer)
+surv_object0 <- Surv(time = TCGA_Masterfile_male$OS_5y_months, event = as.double(TCGA_Masterfile_male$OS_5y_event))
+```
+
+```{r}
+fit00 <- survfit(surv_object0 ~ Y_expres, data = TCGA_Masterfile_male)
+```
+
+```{r}
+ggsurvplot(fit00, data = TCGA_Masterfile_male, pval = TRUE, title = "OS 5 year event")
+```
+
+```{r}
+res_Y <- getBM(attributes = c("hgnc_symbol", "description","chromosome_name", "gene_biotype" ), filters    = "hgnc_symbol", values = median$Symbol, mart = human)
+```
+
+```{r}
+res_Y <- res_Y[res_Y$gene_biotype == "protein_coding",]
+```
+
+```{r}
+TPM_Y_cod <- TPM_sym[res_Y$hgnc_symbol,]
+TPM_Y_cod <- TPM_Y_cod[,TCGA_Masterfile_male$Patient_ID]
+```
+
+```{r}
+library(pheatmap)
+library(scales)
+  choose_matrix=TPM_Y_cod
+  #choose_matrix[1:4,1:4]s, )
+  choose_matrix=rescale(t(scale(t(log2(choose_matrix+1)))), to=c(-4,4))
+  clustering <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2")
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile_male$Gender, OS = TCGA_Masterfile_male$OS_5y_event, LoY = TCGA_Masterfile_male$LoY, EDY = TCGA_Masterfile_male$EDY)
+  rownames(annotation_col)=colnames(TPM_Y_cod)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, cluster_cols = clustering, cutree_cols = 3
+           , filename = 'Y_GenesAbove0_TPM_protcod.png'
+           )
+```
+
+The addition of SPRY3 gene, the only gene added in comparison with the DEG geneset seems to unbalance the groups.
+
+# Analysis of the downregulated genes (AKA: the ones expressed in females)
+
+We select the DEGs in the 3 analysis which have a *p-value* lower than 0.05 and a *Log2FoldChange* higher than 1.
+
+```{r}
+limma_sig1 <- nrDEG1[nrDEG1[,2] <= 0.05 & nrDEG1[,1] <= -1,]
+edgeR_sig1 <- nrDEG2[nrDEG2[,2] <= 0.05 & nrDEG2[,1] <= -1,]
+DESeq_sig1 <- nrDEG3[nrDEG3[,2] <= 0.05 & nrDEG3[,1] <= -1,]
+```
+
+We extract the genes in a list:
+
+```{r}
+genes1 <- list(rownames(limma_sig1), rownames(edgeR_sig1), rownames(DESeq_sig1))
+```
+
+With this we can represent a Venn diagram:
+
+```{r}
+venn.diagram(
+  x = genes1,
+  category.names = c("Limma" , "EdgeR" , "DESeq"),
+  filename = '14_venn_diagramm.png',
+  output=TRUE, 
+  imagetype="png" ,
+          height = 480 , 
+          width = 480 , 
+          resolution = 300,
+          compression = "lzw",
+          lwd = 1,
+          col=c("#440154ff", '#21908dff', '#fde725ff'),
+          fill = c(alpha("#440154ff",0.3), alpha('#21908dff',0.3), alpha('#fde725ff',0.3)),
+          cex = 0.5,
+          fontfamily = "sans",
+          cat.cex = 0.3,
+          cat.default.pos = "outer",
+          cat.pos = c(-27, 27, 135),
+          cat.dist = c(0.055, 0.055, 0.085),
+          cat.fontfamily = "sans",
+          cat.col = c("#440154ff", '#21908dff', '#fde725ff'),
+          rotation = 1
+)
+```
+
+<p align="center" width="100%">
+    <img width="100%" src="venn_diagramm.png"> <br>
+    **Figure 11:** VennDiagram overlapping downregulated genes for 3 different DEG analysis
+</p>
+
+```{r}
+ol1 = calculate.overlap(x = genes1)
+names(ol1) <- c("a123", "a12", "a13", "a23", "a1", "a2", "a3")
+```
+
+```{r}
+overlaping_genes1 <- ol1$a123
+```
+
+We can represent then this genes in a heatmap, for it to be more informative we first are going to extract symbols for each gene and then use the TPM values.
+
+```{r}
+res_human1 <- getBM(attributes = c("ensembl_gene_id", "external_gene_name", "description","chromosome_name", "gene_biotype" ), filters    = "ensembl_gene_id", values = overlaping_genes1, mart = human)
+```
+
+```{r}
+TPM_fem <- TPM_sym[res_human1$external_gene_name,]
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TPM_fem
+  #choose_matrix[1:4,1:4]
+  choose_matrix=rescale(t(scale(t(log2(choose_matrix+1)))), to=c(-1,1))
+  clustering1 <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2") 
+  t <- cutree(clustering1, 3) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender, Location = TCGA_Masterfile$Subsite, HPV = TCGA_Masterfile$HPV, OS = TCGA_Masterfile$OS_5y_event )
+  rownames(annotation_col)=colnames(TPM_fem)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, cluster_cols = clustering1, cutree_cols = 3
+           #,filename = 'Overlaping_genes_expression_X.png'
+           )
+  
+```
+```{r}
+TPM_fem1 <- TPM_fem[-9,]
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TPM_fem1
+  #choose_matrix[1:4,1:4]
+  choose_matrix=rescale(t(scale(t(log2(choose_matrix+1)))), to=c(-1,1))
+  clustering1 <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2") 
+  t <- cutree(clustering1, 3) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender, Location = TCGA_Masterfile$Subsite, HPV = TCGA_Masterfile$HPV, OS = TCGA_Masterfile$OS_5y_event )
+  rownames(annotation_col)=colnames(TPM_fem1)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, cluster_cols = clustering1, cutree_cols = 3
+           #,filename = 'Overlaping_genes_expression_X.png'
+           )
+  
+```
+
+```{r}
+Counts_1 <- Counts[res_human1$ensembl_gene_id,]
+```
+
+```{r}
+rownames(Counts_1) <- res_human1$external_gene_name
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=Counts_1
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  clustering1 <- hclust(dist(t(choose_matrix), method = "euclidean"), method = "ward.D2") 
+  t <- cutree(clustering1, 3) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender, Location = TCGA_Masterfile$Subsite, HPV = TCGA_Masterfile$HPV, OS = TCGA_Masterfile$OS_5y_event )
+  rownames(annotation_col)=colnames(Counts_1)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, cluster_cols = clustering1, cutree_cols = 3
+           #,filename = 'Overlaping_genes_expression_X.png'
+           )
+  
+```
+
+```{r}
+TPM_DEG_together <- rbind(TPM_fem1, TPM_mal)
+```
+
+```{r}
+ library(pheatmap)
+  choose_matrix=TPM_DEG_together
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1)))) 
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(Gender = TCGA_Masterfile$Gender, Location = TCGA_Masterfile$Subsite, HPV = TCGA_Masterfile$HPV, OS = TCGA_Masterfile$OS_5y_event )
+  rownames(annotation_col)=colnames(TPM_DEG_together)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col
+           #, filename = 'Overlaping_genes_expression_together.png'
+           )
+  
+```
+

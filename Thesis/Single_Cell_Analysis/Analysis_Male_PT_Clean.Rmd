@@ -1,0 +1,1329 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-01-23"
+---
+
+```{r}
+library(Seurat)
+library(SeuratDisk)
+library(SeuratWrappers)
+library(UCell)
+
+library(patchwork)
+library(harmony)
+library(rliger)
+library(reshape2)
+library(RColorBrewer)
+library(dplyr)
+library(stringr) 
+library(plyr)
+```
+
+```{r}
+Male_PT <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Male_PT.rds")
+Male_PT <- subset(Male_PT, subset = Tumor == c("Tumor"))
+Male_PT$Category <- str_c(Male_PT$Dataset, "_", Male_PT$HPV)
+
+obj.list <- SplitObject(Male_PT, split.by = c("Category"))
+```
+
+```{r}
+# run standard anlaysis workflow
+for (i in 1:length(obj.list)){
+  obj.list[[i]] <- NormalizeData(obj.list[[i]])
+  obj.list[[i]] <- FindVariableFeatures(obj.list[[i]])
+  obj.list[[i]] <- ScaleData(obj.list[[i]])
+  obj.list[[i]] <- RunPCA(obj.list[[i]])
+  obj.list[[i]] <- FindNeighbors(obj.list[[i]], dims = 1:30, reduction = "pca")
+  obj.list[[i]] <- FindClusters(obj.list[[i]], resolution = 2, cluster.name = "unintegrated_clusters")
+  obj.list[[i]] <- RunUMAP(obj.list[[i]], dims = 1:30, reduction = "pca", reduction.name = "umap.unintegrated")
+  }
+```
+
+Computing Y Chromosome signature score using UCell 
+
+```{r}
+chrY.gene <- c("DDX3Y",	"EIF1AY",	"KDM5D",	"NLGN4Y",	"RPS4Y1",	"SRY",	"TBL1Y",	"TMSB4Y",	"USP9Y",	"UTY",	"ZFY", "PRKY")
+genes <- list(ChrY.signature = chrY.gene)
+for (i in 1:length(obj.list)){
+  obj.list[[i]] <- AddModuleScore_UCell(obj.list[[i]], 
+                                      features=genes, name=NULL)
+  }
+```
+Pseudobulking and performing GSVA score per patient:
+
+```{r}
+library(GSVA)
+library(GSEABase)
+library(GSVAdata)
+library(ggplot2)
+
+bulk.list <- list()
+for (i in 1:length(obj.list)){
+  bulk.list[[i]] <- Seurat:::PseudobulkExpression(object = obj.list[[i]], pb.method = 'aggregate', slot = 'counts', group.by = "Patient")
+  names(bulk.list)[i] <- names(obj.list)[i]
+  }
+
+GeneSetCollection <- getGmt("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA/EDY/genesignature_Y_chromosome.gmt")
+GSVA.list <- list()
+for (i in 1:length(bulk.list)){
+  GSVA.list[[i]] <- gsva((as.matrix(bulk.list[[i]]$RNA)), GeneSetCollection, method = "gsva", annotation = "org.Hs.eg.db", min.sz=5, max.sz=500, parallel.sz = 4, kcdf="Poisson")
+  names(GSVA.list)[i] <- names(bulk.list)[i]
+  }
+```
+
+Performing Patient Classification according to GSVA score and division in High, Intermediate and Low group:
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Tumor_Analysis")
+data.list <- list()
+data.list_asc <- list()
+for (i in 1:length(GSVA.list)){
+  data.list[[i]] <- data.frame(Ychrom = GSVA.list[[i]][1,], Patient = colnames(GSVA.list[[i]]))
+  data.list[[i]] <- data.list[[i]][order(data.list[[i]]$Patient),]
+  names(data.list)[i] <- names(GSVA.list)[i]
+  
+    p33 <- quantile(data.list[[i]]$Ychrom, probs = seq(0.33, 0.66))
+    p66 <- quantile(data.list[[i]]$Ychrom, probs = seq(0.66, 0.99))
+
+     Group <- c()
+       for (a in 1:length(data.list[[i]]$Ychrom)){
+          if (data.list[[i]]$Ychrom[a] <= p33 ) {
+          Group[a] = c("Low")
+          } else if (data.list[[i]]$Ychrom[a] >= p66) {
+          Group[a] = c("High")
+          }else {
+          Group[a] = c("Intermediate")
+       }
+     }
+
+    data.list[[i]]$Group <- Group
+    data.list_asc[[i]] <- data.list[[i]][order(data.list[[i]]$Ychrom),]
+  names(data.list_asc)[i] <- names(data.list)[i]
+  ggplot(data = data.list_asc[[i]], aes(x = factor(Patient, level = rownames(data.list_asc[[i]])), y = Ychrom, fill = Group)) +
+  labs(y= "Ychrom Geneset Expression"  , x = "Male Patients") +
+    ggtitle(names(data.list_asc[i])) +
+    geom_bar(stat = "identity") +
+           coord_flip( )
+  name <- paste0(names(data.list_asc[i]), ".pdf")
+  ggsave(name)
+  name1 <- paste0(names(data.list[i]), ".rds")
+  saveRDS(data.list[[i]], name1)
+  }
+```
+
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Tumor_Analysis")
+names <- list.files()
+names <- names[grep("[.rds]$", names)]
+path <- paste0("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Tumor_Analysis", names)
+dataset.list <- list()
+for (i in 1:length(names)){
+  dataset.list[[i]] <- readRDS(names[i])
+  names(dataset.list)[i] <- gsub(".rds", "",path[i])
+}
+grouping <- do.call(rbind.data.frame, dataset.list)
+
+Male_PT <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Male_PT.rds")
+
+data <- data.frame(Patient = Male_PT@meta.data$Patient, Group = c(rep(1,length(Male_PT@meta.data$Patient))))
+
+for (a in 1:length(grouping$Patient)){
+  for (i in 1:length(data$Patient)){
+    if (data$Patient[i] == grouping$Patient[a]) {
+      data$Group[i] = grouping$Group[a]
+    }
+  }
+}
+
+Male_PT$Group <- data$Group
+```
+
+```{r}
+allcells_list <-list()
+for (i in 1:length(dataset.list)) {
+  allcells_list[[i]] <- subset(Male_PT, subset= (Patient %in% dataset.list[[i]]$Patient))
+  names(allcells_list)[i] <- names(dataset.list)[i]
+}
+```
+
+```{r}
+require(ggplot2)
+require(scales)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs")
+
+
+
+for (i in 1:length(dataset.list)) {
+  metadata <- na.omit(data.frame(Cluster = allcells_list[[i]]@meta.data$scGate_multi, Group = allcells_list[[i]]@meta.data$Group))
+  name <- names(dataset.list)[i]
+  name <- gsub("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Tumor_Analysis", "", name)
+  name <- paste0(name, "_absolute_number")
+  ggplot(metadata, aes(x=as.factor(Cluster), fill = as.factor(Cluster))) +
+  geom_bar() + 
+  ggtitle(name) +
+  facet_grid(. ~ Group)
+  graph <- paste0(name, ".pdf")
+  ggsave(graph)
+}
+```
+
+GRAPHS USING THE Male_PT object 
+
+```{r}
+Male_PT <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Male_PT.rds")
+Male_PT$Category <- str_c(Male_PT$Dataset, "_", Male_PT$HPV)
+obj.list <- SplitObject(Male_PT, split.by = c("Category"))
+```
+
+Cell Composition RELATIVE VALUES
+
+```{r}
+require(ggplot2)
+require(scales)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs")
+
+for (i in 1:length(obj.list)) {
+  metadata <- na.omit(data.frame(Cluster = obj.list[[i]]@meta.data$scGate_multi, Group = obj.list[[i]]@meta.data$Group))
+  name <- names(obj.list)[i]
+  
+
+  ggplot(metadata, aes(x=as.factor(Cluster), fill = as.factor(Cluster))) +
+  geom_bar(aes(y = ((..count..)/sum(..count..))*100))+ 
+  ## version 3.0.0
+   
+  ggtitle(name) +
+  xlab("Cell Type") + ylab("Percent") + labs(fill = "Cell Type") + ylim(0,30)+
+  theme(axis.text.x=element_blank()) +
+  facet_grid(. ~ Group)
+  graph <- paste0(name, "_relative_number.pdf")
+  ggsave(graph)
+}
+```
+
+Cell Composition ABSOLUTE VALUES
+
+```{r}
+require(ggplot2)
+require(scales)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs")
+
+
+
+for (i in 1:length(obj.list)) {
+  metadata <- na.omit(data.frame(Cluster = obj.list[[i]]@meta.data$scGate_multi, Group = obj.list[[i]]@meta.data$Group))
+  name <- names(obj.list)[i]
+  ggplot(metadata, aes(x=as.factor(Cluster), fill = as.factor(Cluster))) +
+  geom_bar() + 
+  ggtitle(name) +
+  xlab("Cell Type") + ylab("Percent") + labs(fill = "Cell Type") + 
+  ylim(0,6500)+
+  theme(axis.text.x=element_blank()) +
+  facet_grid(. ~ Group)
+  graph <- paste0(name, "_absolute_number.pdf")
+  ggsave(graph)
+}
+```
+
+T-cell DETAILED ANALYSIS
+
+```{r}
+library(ProjecTILs)
+library(STACAS)
+library(ggplot2)
+library(SignatuR)
+library(UCell)
+```
+
+```{r}
+cd8tcell_list <-list()
+for (i in 1:length(obj.list)) {
+  cd8tcell_list[[i]] <- subset(Male_PT, subset= (Category == names(obj.list)[i]))
+  cd8tcell_list[[i]] <- subset(cd8tcell_list[[i]], subset= (scGate_multi == "CD8T"))
+  names(cd8tcell_list)[i] <- names(obj.list)[i]
+}
+```
+
+```{r}
+options(timeout = max(900, getOption("timeout")))
+download.file("https://figshare.com/ndownloader/files/38921366", destfile = "CD8T_human_ref_v1.rds")
+ref.cd8 <- load.reference.map("CD8T_human_ref_v1.rds")
+```
+
+```{r}
+programs <- GetSignature(SignatuR$Hs$Programs)
+ref.cd8 <- AddModuleScore_UCell(ref.cd8, features = programs, assay = "RNA", name = NULL)
+```
+
+```{r}
+obj.projected <- list()
+for (i in 1:length(cd8tcell_list)) {
+  DefaultAssay(cd8tcell_list[[i]]) <- "RNA"
+  cd8tcell_list[[i]] <- ProjecTILs.classifier(query = cd8tcell_list[[i]], ref = ref.cd8, filter.cells = F)
+  cd8tcell_list[[i]] <- AddModuleScore_UCell(cd8tcell_list[[i]], features = programs, assay = "RNA", name = NULL)
+  obj.projected[[i]] <- Run.ProjecTILs(query = cd8tcell_list[[i]], ref = ref.cd8, filter.cells = F)
+  obj.projected[[i]] <- AddModuleScore_UCell(obj.projected[[i]], features = programs, assay = "RNA", name = NULL)
+  names(obj.projected)[[i]] <- names(cd8tcell_list)[[i]]
+  cd8tcell_list[[i]]$CD8Type <- cd8tcell_list[[i]]$functional.cluster
+}
+
+```
+
+```{r}
+cd4tcell_list <-list()
+for (i in 1:length(obj.list)) {
+  cd4tcell_list[[i]] <- subset(Male_PT, subset= (Category == names(obj.list)[i]))
+  cd4tcell_list[[i]] <- subset(cd4tcell_list[[i]], subset= (scGate_multi == "CD4T"))
+  names(cd4tcell_list)[i] <- names(obj.list)[i]
+}
+```
+
+```{r}
+options(timeout = max(900, getOption("timeout")))
+download.file("https://figshare.com/ndownloader/files/39012395", destfile = "CD4T_human_ref_v1.rds")
+ref.cd4 <- load.reference.map("CD4T_human_ref_v1.rds")
+```
+
+```{r}
+programs <- GetSignature(SignatuR$Hs$Programs)
+ref.cd4 <- AddModuleScore_UCell(ref.cd4, features = programs, assay = "RNA", name = NULL)
+```
+
+```{r}
+obj.projected <- list()
+for (i in 1:length(cd4tcell_list)) {
+  DefaultAssay(cd4tcell_list[[i]]) <- "RNA"
+  cd4tcell_list[[i]] <- ProjecTILs.classifier(query = cd4tcell_list[[i]], ref = ref.cd4, filter.cells = F)
+  cd4tcell_list[[i]] <- AddModuleScore_UCell(cd4tcell_list[[i]], features = programs, assay = "RNA", name = NULL)
+  obj.projected[[i]] <- Run.ProjecTILs(query = cd4tcell_list[[i]], ref = ref.cd4, filter.cells = F)
+  obj.projected[[i]] <- AddModuleScore_UCell(obj.projected[[i]], features = programs, assay = "RNA", name = NULL)
+  names(obj.projected)[[i]] <- names(cd4tcell_list)[[i]]
+  cd4tcell_list[[i]]$CD4Type <- cd4tcell_list[[i]]$functional.cluster
+}
+
+```
+
+```{r}
+palette <- ref.cd4@misc$atlas.palette
+for (i in 1:length(cd4tcell_list)) {
+  #a <- 
+    DimPlot(cd4tcell_list[[i]], group.by = "CD4Type", cols = palette, split.by = "Group") +
+    theme(aspect.ratio = 1) + ggtitle(paste0(names(cd4tcell_list[[i]]), c(" CD4 T cells")))
+# Convert the DimPlot object to a DiagrammeR plot
+#ggsave(filename = "tial.jpg", height = 7, width = 12, plot = a, quality = 50)
+}
+
+```
+```{r}
+obj.projected <- list()
+for (i in 1:length(cd8tcell_list)) {
+  DefaultAssay(cd8tcell_list[[i]]) <- "RNA"
+  cd8tcell_list[[i]] <- ProjecTILs.classifier(query = cd8tcell_list[[i]], ref = ref.cd8, filter.cells = F)
+  cd8tcell_list[[i]] <- AddModuleScore_UCell(cd8tcell_list[[i]], features = programs, assay = "RNA", name = NULL)
+  obj.projected[[i]] <- Run.ProjecTILs(query = cd8tcell_list[[i]], ref = ref.cd8, filter.cells = F)
+  obj.projected[[i]] <- AddModuleScore_UCell(obj.projected[[i]], features = programs, assay = "RNA", name = NULL)
+  names(obj.projected)[[i]] <- names(cd8tcell_list)[[i]]
+  cd8tcell_list[[i]]$CD8Type <- cd8tcell_list[[i]]$functional.cluster
+}
+
+```
+
+```{r}
+cd4tcell_list <-list()
+for (i in 1:length(obj.list)) {
+  cd4tcell_list[[i]] <- subset(Male_PT, subset= (Category == names(obj.list)[i]))
+  cd4tcell_list[[i]] <- subset(cd4tcell_list[[i]], subset= (scGate_multi == "CD4T"))
+  names(cd4tcell_list)[i] <- names(obj.list)[i]
+}
+```
+
+```{r}
+options(timeout = max(900, getOption("timeout")))
+download.file("https://figshare.com/ndownloader/files/39012395", destfile = "CD4T_human_ref_v1.rds")
+ref.cd4 <- load.reference.map("CD4T_human_ref_v1.rds")
+```
+
+```{r}
+programs <- GetSignature(SignatuR$Hs$Programs)
+ref.cd4 <- AddModuleScore_UCell(ref.cd4, features = programs, assay = "RNA", name = NULL)
+```
+
+```{r}
+obj.projected <- list()
+for (i in 1:length(cd4tcell_list)) {
+  DefaultAssay(cd4tcell_list[[i]]) <- "RNA"
+  cd4tcell_list[[i]] <- ProjecTILs.classifier(query = cd4tcell_list[[i]], ref = ref.cd4, filter.cells = T)
+  #cd4tcell_list[[i]] <- AddModuleScore_UCell(cd4tcell_list[[i]], features = programs, assay = "RNA", name = NULL)
+  #obj.projected[[i]] <- Run.ProjecTILs(query = cd4tcell_list[[i]], ref = ref.cd4, filter.cells = F)
+  #obj.projected[[i]] <- AddModuleScore_UCell(obj.projected[[i]], features = programs, assay = "RNA", name = NULL)
+  #names(obj.projected)[[i]] <- names(cd4tcell_list)[[i]]
+  #cd4tcell_list[[i]]$CD4Type <- cd4tcell_list[[i]]$functional.cluster
+}
+
+```
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/CD4_Tcell")
+palette <- ref.cd4@misc$atlas.palette
+for (i in 1:length(cd4tcell_list)) {
+a <- DimPlot(cd4tcell_list[[i]], group.by = "functional.cluster", cols = palette, split.by = "Group") +
+    theme(aspect.ratio = 1) + ggtitle(paste0(names(cd4tcell_list[i]), c(" CD4 T cells")))
+# Convert the DimPlot object to a DiagrammeR plot
+    ggsave(filename = paste0(names(cd4tcell_list[i]),c("CD4T_filtered"), c(".jpg")), height = 7, width = 12, plot = a, quality = 50)
+}
+
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/CD4_Tcell")
+palette <- ref.cd4@misc$atlas.palette
+for (i in 1:length(cd4tcell_list)) {
+a <- DimPlot(cd4tcell_list[[i]], group.by = "CD4Type", cols = palette, split.by = "Group") +
+    theme(aspect.ratio = 1) + ggtitle(paste0(names(cd4tcell_list[i]), c(" CD4 T cells")))
+# Convert the DimPlot object to a DiagrammeR plot
+    ggsave(filename = paste0(names(cd4tcell_list[i]),c("CD4T"), c(".jpg")), height = 7, width = 12, plot = a, quality = 50)
+}
+
+```
+
+
+```{r}
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/CD4_Tcell")
+
+for (i in 1:length(cd4tcell_list)) {
+  metadata <- na.omit(data.frame(Cluster = cd4tcell_list[[i]]@meta.data$CD4Type, Group = cd4tcell_list[[i]]@meta.data$Group))
+  name <- names(cd4tcell_list)[i]
+  
+  split.object <- split(metadata, metadata$Group)
+  
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_bar(position="fill", stat="identity") +
+  ggtitle(name) +
+  geom_text(aes(label = lbl), 
+            size = 3, 
+            position = position_stack(vjust = 0.5)) +
+  xlab("Group") + ylab("Percent") + labs(fill = "CD4T Cell Type") 
+  #+
+  #theme(axis.text.x=element_blank()) 
+  graph <- paste0(name, "_relative_number.pdf")
+  ggsave(graph, )
+}
+```
+```{r}
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/CD4_Tcell")
+
+for (i in 1:length(cd4tcell_list)) {
+  metadata <- na.omit(data.frame(Cluster = cd4tcell_list[[7]]@meta.data$functional.cluster, Group = cd4tcell_list[[7]]@meta.data$Group))
+  name <- names(cd4tcell_list)[i]
+  
+  split.object <- split(metadata, metadata$Group)
+  
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_bar(position="fill", stat="identity") +
+  ggtitle(name) +
+  geom_text(aes(label = lbl), 
+            size = 3, 
+            position = position_stack(vjust = 0.5)) +
+  xlab("Group") + ylab("Percent") + labs(fill = "CD4T Cell Type") 
+  #+
+  #theme(axis.text.x=element_blank()) 
+  graph <- paste0(name, "_relative_number_filtered.pdf")
+  ggsave(graph, )
+}
+```
+
+```{r}
+cd8tcell <- subset(Male_PT, subset= (scGate_multi == "CD8T"))
+options(timeout = max(900, getOption("timeout")))
+download.file("https://figshare.com/ndownloader/files/38921366", destfile = "CD8T_human_ref_v1.rds")
+ref.cd8 <- load.reference.map("CD8T_human_ref_v1.rds")
+programs <- GetSignature(SignatuR$Hs$Programs)
+ref.cd8 <- AddModuleScore_UCell(ref.cd8, features = programs, assay = "RNA", name = NULL)
+
+obj.projected <- list()
+DefaultAssay(cd8tcell) <- "RNA"
+cd8tcell <- ProjecTILs.classifier(query = cd8tcell, ref = ref.cd8, filter.cells = F)
+cd8tcell <- AddModuleScore_UCell(cd8tcell, features = programs, assay = "RNA", name = NULL)
+cd8tcell$CD8Type <- cd8tcell$functional.cluster
+obj.projected <- Run.ProjecTILs(query = cd8tcell, ref = ref.cd8, filter.cells = F)
+obj.projected <- AddModuleScore_UCell(obj.projected, features = programs, assay = "RNA", name = NULL)
+cd8tcell <- ProjecTILs.classifier(query = cd8tcell, ref = ref.cd8, filter.cells = T)
+  
+```
+
+
+```{r}
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/CD8_TCell")
+                                  
+color <-c("CD8.CM"= "#8dd3c7","CD8.EM"  = "#ffffb3","CD8.MAIT" = "#bebada","CD8.NaiveLike"= "#fccde5","CD8.TEMRA" = "#80b1d3","CD8.TEX" = "#fdb462","CD8.TPEX"= "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = cd8tcell@meta.data$CD8Type, Group = cd8tcell@meta.data$Group, HPV = cd8tcell@meta.data$HPV, Dataset = cd8tcell@meta.data$Dataset))
+
+
+  metadata$Category <- str_c(metadata$Dataset, "_", metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Dataset, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD8T Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Percent") + labs(fill = "CD8T Cell Type") +
+  facet_grid(HPV ~ Dataset) 
+  graph <- paste0("CD8T_CellType", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/CD8_TCell")
+                                  
+color <-c("CD8.CM"= "#8dd3c7","CD8.EM"  = "#ffffb3","CD8.MAIT" = "#bebada","CD8.NaiveLike"= "#fccde5","CD8.TEMRA" = "#80b1d3","CD8.TEX" = "#fdb462","CD8.TPEX"= "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = cd8tcell@meta.data$CD8Type, Group = cd8tcell@meta.data$Group, HPV = cd8tcell@meta.data$HPV, Dataset = cd8tcell@meta.data$Dataset))
+
+
+  metadata$Category <- str_c(metadata$Dataset, "_", metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Dataset, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD8T Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Percent") + labs(fill = "CD8T Cell Type") +
+  facet_grid(HPV ~ Dataset) 
+  graph <- paste0("CD8T_CellType", "_absolute_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/CD8_TCell")
+
+  metadata <- na.omit(data.frame(Cluster = cd8tcell@meta.data$CD8Type, Group = cd8tcell@meta.data$Group, HPV = cd8tcell@meta.data$HPV, Dataset = cd8tcell@meta.data$Dataset))
+ 
+  metadata$Category <- str_c(metadata$Dataset, "_", metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category)
+  
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Dataset, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  ggtitle(c("CD8T Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Group") + ylab("Percent") + labs(fill = "CD8T Cell Type") +
+  facet_grid(HPV ~ Dataset)
+  
+  graph <- paste0("CD8T_Cell_Type", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs")
+
+  metadata <- na.omit(data.frame(Cluster = Male_PT@meta.data$scGate_multi, Group = Male_PT@meta.data$Group, HPV = Male_PT@meta.data$HPV, Dataset = Male_PT@meta.data$Dataset))
+ 
+  metadata$Category <- str_c(metadata$Dataset, "_", metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category)
+  
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Dataset, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  ggtitle(c("Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 0.7, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Group") + ylab("Percent") + labs(fill = "CD8T Cell Type") +
+  facet_grid(HPV ~ Dataset)
+  
+  graph <- paste0("Cell_Type", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs")
+
+  metadata <- na.omit(data.frame(Cluster = Male_PT@meta.data$scGate_multi, Group = Male_PT@meta.data$Group, HPV = Male_PT@meta.data$HPV, Dataset = Male_PT@meta.data$Dataset))
+ 
+  metadata$Category <- str_c(metadata$Dataset, "_", metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category)
+  
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Dataset, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  ggtitle(c("Cell Type")) +
+  geom_text(aes(label = n), 
+            size = 0.9, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Group") + ylab("Percent") + labs(fill = "CD8T Cell Type") +
+  facet_grid(HPV ~ Dataset)
+  
+  graph <- paste0("Cell_Type", "_absolute_number.pdf")
+  ggsave(graph)
+```
+```{r}
+Male_PT$Cells_Tumor <- ifelse(Male_PT$Tumor == "Tumor", "Tumor", Male_PT$scGate_multi)
+```
+
+
+```{r}
+Male_3 <- subset(Male_PT, subset = Dataset != c("Kurten"))
+
+color <-c("Bcell"= "#8dd3c7","CD4T" = "#ffffb3","CD8T" = "#bebada","Endothelial"= "#fb8072","Epithelial"= "#ffed6f","Fibroblast" = "#b3de69" ,"Macrophage"= "#fdb462","Mast" = "#fccde5","Monocyte"= "#d9d9d9","Multi" = "#bc80bd" , "Neutrophils"= "#ccebc5", "NK"= "#6a3d9a" , "panDC"= "#1f78b4" , "PlasmaCell" = "#c51b8a", "Tumor" = "#80b1d3")
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs")
+
+metadata <- na.omit(data.frame(Cluster = Male_3@meta.data$Cells_Tumor, Group = Male_3@meta.data$Group_3, HPV = Male_3@meta.data$HPV, Dataset = Male_3@meta.data$Dataset))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Percent") + labs(fill = "Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("3D_Cell_Type", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+#Male_3 <- subset(Male_PT, subset = Dataset != c("Kurten"))
+
+color <-c("Bcell"= "#8dd3c7","CD4T" = "#ffffb3","CD8T" = "#bebada","Endothelial"= "#fb8072","Epithelial"= "#ffed6f","Fibroblast" = "#b3de69" ,"Macrophage"= "#fdb462","Mast" = "#fccde5","Monocyte"= "#d9d9d9","Multi" = "#bc80bd" , "Neutrophils"= "#ccebc5", "NK"= "#6a3d9a" , "panDC"= "#1f78b4" , "PlasmaCell" = "#c51b8a", "Tumor" = "#80b1d3")
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs")
+
+  metadata <- na.omit(data.frame(Cluster = Male_3@meta.data$Cells_Tumor, Group = Male_3@meta.data$Group_3, HPV = Male_3@meta.data$HPV, Dataset = Male_3@meta.data$Dataset))
+ 
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category)
+  
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Percent") + labs(fill = "CD8T Cell Type") +
+  facet_grid(. ~ HPV)
+  
+  graph <- paste0("3D_Cell_Type", "_absolute_number.pdf")
+  ggsave(graph)
+  
+```
+```{r}
+
+#Male_3 <- subset(Male_PT, subset = Dataset != c("Kurten"))
+Male_3 <- subset(Male_3, subset = Cells_Tumor == c("Bcell","CD4T","CD8T", "Macrophage","Mast","Monocyte","Neutrophils","NK", "panDC" ))
+
+color <-c("Bcell"= "#8dd3c7","CD4T" = "#ffffb3","CD8T" = "#bebada","Macrophage"= "#b3de69","Mast" = "#fccde5","Monocyte"= "#bc80bd", "Neutrophils"= "#ccebc5", "NK"= "#c51b8a" , "panDC"= "#1f78b4")
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs")
+
+metadata <- na.omit(data.frame(Cluster = Male_3@meta.data$Cells_Tumor, Group = Male_3@meta.data$Group_3, HPV = Male_3@meta.data$HPV, Dataset = Male_3@meta.data$Dataset))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Percent") + labs(fill = "Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("3D_ImmuneCell", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+#Male_3 <- subset(Male_PT, subset = Dataset != c("Kurten"))
+#Male_3 <- subset(Male_3, subset = scGate_multi == c("Bcell","CD4T","CD8T", "Macrophage","Mast","Monocyte","Neutrophils","NK", "panDC" ))
+
+color <-c("Bcell"= "#8dd3c7","CD4T" = "#ffffb3","CD8T" = "#bebada","Macrophage"= "#b3de69","Mast" = "#fccde5","Monocyte"= "#bc80bd", "Neutrophils"= "#ccebc5", "NK"= "#c51b8a" , "panDC"= "#1f78b4")
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs")
+
+  metadata <- na.omit(data.frame(Cluster = Male_3@meta.data$Cells_Tumor, Group = Male_3@meta.data$Group_3, HPV = Male_3@meta.data$HPV, Dataset = Male_3@meta.data$Dataset))
+ 
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category)
+  
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Group") + ylab("Percent") + labs(fill = "CD8T Cell Type") +
+  facet_grid(. ~ HPV)
+  
+  graph <- paste0("3D_ImmuneCell", "_absolute_number.pdf")
+  ggsave(graph)
+  
+```
+
+
+```{r}
+
+#cd8tcell<- subset(cd8tcell, subset = Dataset != c("Kurten"))
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/CD8_TCell")
+                                  
+color <-c("CD8.CM"= "#8dd3c7","CD8.EM"  = "#ffffb3","CD8.MAIT" = "#bebada","CD8.NaiveLike"= "#fccde5","CD8.TEMRA" = "#80b1d3","CD8.TEX" = "#fdb462","CD8.TPEX"= "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = cd8tcell@meta.data$CD8Type, Group = cd8tcell@meta.data$Group, HPV = cd8tcell@meta.data$HPV, Dataset = cd8tcell@meta.data$Dataset))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD8T Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Percent") + labs(fill = "CD8T Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("3D_CD8T_CellType", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+
+#cd8tcell<- subset(cd8tcell, subset = Dataset != c("Kurten"))
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/CD8_TCell")
+                                  
+color <-c("CD8.CM"= "#8dd3c7","CD8.EM"  = "#ffffb3","CD8.MAIT" = "#bebada","CD8.NaiveLike"= "#fccde5","CD8.TEMRA" = "#80b1d3","CD8.TEX" = "#fdb462","CD8.TPEX"= "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = cd8tcell@meta.data$CD8Type, Group = cd8tcell@meta.data$Group, HPV = cd8tcell@meta.data$HPV, Dataset = cd8tcell@meta.data$Dataset))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD8T Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Percent") + labs(fill = "CD8T Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("3D_CD8T_CellType", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+
+```{r}
+
+#cd8tcell<- subset(cd8tcell, subset = Dataset != c("Kurten"))
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/CD8_TCell")
+                                  
+color <-c("CD8.CM"= "#8dd3c7","CD8.EM"  = "#ffffb3","CD8.MAIT" = "#bebada","CD8.NaiveLike"= "#fccde5","CD8.TEMRA" = "#80b1d3","CD8.TEX" = "#fdb462","CD8.TPEX"= "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = cd8tcell@meta.data$CD8Type, Group = cd8tcell@meta.data$Group, HPV = cd8tcell@meta.data$HPV, Dataset = cd8tcell@meta.data$Dataset))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD8T Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Percent") + labs(fill = "CD8T Cell Type") +
+  facet_grid(.~ HPV) 
+  graph <- paste0("3D_CD8T_CellType", "_absolute_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+cd4tcell <- subset(Male_PT, subset= (scGate_multi == "CD4T"))
+options(timeout = max(900, getOption("timeout")))
+download.file("https://figshare.com/ndownloader/files/39012395", destfile = "CD4T_human_ref_v1.rds")
+ref.cd4 <- load.reference.map("CD4T_human_ref_v1.rds")
+programs <- GetSignature(SignatuR$Hs$Programs)
+ref.cd4 <- AddModuleScore_UCell(ref.cd4, features = programs, assay = "RNA", name = NULL)
+
+obj.projected <- list()
+DefaultAssay(cd4tcell) <- "RNA"
+cd4tcell <- ProjecTILs.classifier(query = cd4tcell, ref = ref.cd4, filter.cells = F)
+cd4tcell <- AddModuleScore_UCell(cd4tcell, features = programs, assay = "RNA", name = NULL)
+cd4tcell$CD4Type <- cd4tcell$functional.cluster
+obj.projected <- Run.ProjecTILs(query = cd4tcell, ref = ref.cd4, filter.cells = F)
+obj.projected <- AddModuleScore_UCell(obj.projected, features = programs, assay = "RNA", name = NULL)
+cd4tcell <- ProjecTILs.classifier(query = cd4tcell, ref = ref.cd4, filter.cells = T)
+  
+```
+
+
+
+
+```{r}
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/CD4_Tcell")
+                                                   
+color <-c("CD4.CTL_EOMES"= "#8dd3c7","CD4.CTL_Exh"  = "#ffffb3","CD4.CTL_GNLY" = "#bebada","CD4.NaiveLike"= "#fccde5","CD4.Tfh" = "#80b1d3","CD4.Th17"  = "#fdb462","CD4.Treg" = "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = cd4tcell@meta.data$CD4Type, Group = cd4tcell@meta.data$Group, HPV = cd4tcell@meta.data$HPV, Dataset = cd4tcell@meta.data$Dataset))
+
+
+  metadata$Category <- str_c(metadata$Dataset, "_", metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Dataset, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD4T Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Percent") + labs(fill = "CD4T Cell Type") +
+  facet_grid(HPV ~ Dataset) 
+  graph <- paste0("CD4T_CellType", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/CD4_Tcell")
+                                                   
+color <-c("CD4.CTL_EOMES"= "#8dd3c7","CD4.CTL_Exh"  = "#ffffb3","CD4.CTL_GNLY" = "#bebada","CD4.NaiveLike"= "#fccde5","CD4.Tfh" = "#80b1d3","CD4.Th17"  = "#fdb462","CD4.Treg" = "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = cd4tcell@meta.data$CD4Type, Group = cd4tcell@meta.data$Group, HPV = cd4tcell@meta.data$HPV, Dataset = cd4tcell@meta.data$Dataset))
+
+
+  metadata$Category <- str_c(metadata$Dataset, "_", metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Dataset, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD4T Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Percent") + labs(fill = "CD4T Cell Type") +
+  facet_grid(HPV ~ Dataset) 
+  graph <- paste0("CD4T_CellType", "_absolute_number.pdf")
+  ggsave(graph)
+```
+```{r}
+cd4tcell<- subset(cd4tcell, subset = Dataset != c("Kurten"))
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/CD4_Tcell")
+                                                   
+color <-c("CD4.CTL_EOMES"= "#8dd3c7","CD4.CTL_Exh"  = "#ffffb3","CD4.CTL_GNLY" = "#bebada","CD4.NaiveLike"= "#fccde5","CD4.Tfh" = "#80b1d3","CD4.Th17"  = "#fdb462","CD4.Treg" = "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = cd4tcell@meta.data$CD4Type, Group = cd4tcell@meta.data$Group, HPV = cd4tcell@meta.data$HPV, Dataset = cd4tcell@meta.data$Dataset))
+
+
+  metadata$Category <- str_c( metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD4T Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Percent") + labs(fill = "CD4T Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("3D_CD4T_CellType", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/CD4_Tcell")
+                                                   
+color <-c("CD4.CTL_EOMES"= "#8dd3c7","CD4.CTL_Exh"  = "#ffffb3","CD4.CTL_GNLY" = "#bebada","CD4.NaiveLike"= "#fccde5","CD4.Tfh" = "#80b1d3","CD4.Th17"  = "#fdb462","CD4.Treg" = "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = cd4tcell@meta.data$CD4Type, Group = cd4tcell@meta.data$Group, HPV = cd4tcell@meta.data$HPV, Dataset = cd4tcell@meta.data$Dataset))
+
+
+  metadata$Category <- str_c( metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD4T Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Cell Number") + labs(fill = "CD4T Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("3D_CD4T_CellType", "_absolute_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+dccell <- subset(Male_PT, subset= (scGate_multi == "panDC"))
+options(timeout = max(900, getOption("timeout")))
+download.file("https://figshare.com/ndownloader/files/39119888", destfile = "DC_human_ref_v1.rds")
+ref.dc <- load.reference.map("DC_human_ref_v1.rds")
+
+dccell <- ProjecTILs.classifier(query = dccell, ref = ref.dc, filter.cells = F)
+dccell$DCType <- dccell$functional.cluster
+```
+
+```{r}
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/DC")
+                                                                                        
+color <-c("AS-DC"= "#8dd3c7","cDC1"  = "#ffffb3","cDC2_CD1A" = "#bebada","cDC2_CLEC10A"= "#fccde5","DC3"  = "#80b1d3","MonoDC"  = "#fdb462","pDC"  = "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = dccell@meta.data$DCType, Group = dccell@meta.data$Group, HPV = dccell@meta.data$HPV, Dataset = dccell@meta.data$Dataset))
+
+
+  metadata$Category <- str_c(metadata$Dataset, "_", metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Dataset, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("DC Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Percent") + labs(fill = "DC Cell Type") +
+  facet_grid(HPV ~ Dataset) 
+  graph <- paste0("DC_CellType", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/DC")
+                                                                                        
+color <-c("AS-DC"= "#8dd3c7","cDC1"  = "#ffffb3","cDC2_CD1A" = "#bebada","cDC2_CLEC10A"= "#fccde5","DC3"  = "#80b1d3","MonoDC"  = "#fdb462","pDC"  = "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = dccell@meta.data$DCType, Group = dccell@meta.data$Group, HPV = dccell@meta.data$HPV, Dataset = dccell@meta.data$Dataset))
+
+
+  metadata$Category <- str_c(metadata$Dataset, "_", metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Dataset, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("DC Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Percent") + labs(fill = "DC Cell Type") +
+  facet_grid(HPV ~ Dataset) 
+  graph <- paste0("DC_CellType", "_absolute_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+dccell<- subset(dccell, subset = Dataset != c("Kurten"))
+
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/DC")
+                                                                                        
+color <-c("AS-DC"= "#8dd3c7","cDC1"  = "#ffffb3","cDC2_CD1A" = "#bebada","cDC2_CLEC10A"= "#fccde5","DC3"  = "#80b1d3","MonoDC"  = "#fdb462","pDC"  = "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = dccell@meta.data$DCType, Group = dccell@meta.data$Group, HPV = dccell@meta.data$HPV, Dataset = dccell@meta.data$Dataset))
+
+
+  metadata$Category <- str_c( metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("DC Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Percent") + labs(fill = "DC Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("3D_DC_CellType", "_relative_number.pdf")
+  ggsave(graph)
+```
+
+```{r}
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Graphs/DC")
+                                                                                        
+color <-c("AS-DC"= "#8dd3c7","cDC1"  = "#ffffb3","cDC2_CD1A" = "#bebada","cDC2_CLEC10A"= "#fccde5","DC3"  = "#80b1d3","MonoDC"  = "#fdb462","pDC"  = "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = dccell@meta.data$DCType, Group = dccell@meta.data$Group, HPV = dccell@meta.data$HPV, Dataset = dccell@meta.data$Dataset))
+
+
+  metadata$Category <- str_c( metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=n, fill = as.factor(Cluster))) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("DC Cell Type")) +
+  #geom_text(aes(label = n), 
+            #size = 3, 
+            #position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Percent") + labs(fill = "DC Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("3D_DC_CellType", "_absolute_number.pdf")
+  ggsave(graph)
+```

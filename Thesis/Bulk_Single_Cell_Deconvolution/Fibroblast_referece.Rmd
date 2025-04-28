@@ -1,0 +1,117 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-03-21"
+---
+
+```{r}
+library(Seurat)
+library(scGate)
+library(ProjecTILs)
+library(Matrix)
+```
+
+```{r}
+merged <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/scRNA-seq/merged.rds")
+```
+
+```{r}
+#Generate low-dimensional embeddings using a standard Seurat pipeline
+
+merged <- NormalizeData(merged, verbose = FALSE)
+merged <- FindVariableFeatures(merged, nfeatures = 1500, verbose = FALSE)
+
+# bk.list <- unlist(scGate::genes.blacklist.default$Mm)
+# VariableFeatures(mo.mac) <- setdiff(VariableFeatures(mo.mac), bk.list)
+
+ndim = 20
+seed = 1234
+merged <- ScaleData(merged, verbose = TRUE)
+
+merged <- RunPCA(merged, features = VariableFeatures(merged, ndims.print = 1:5, nfeatures.print = 5, npcs = ndim))
+merged <- RunUMAP(merged, reduction = "pca", dims = 1:ndim, seed.use = seed)
+```
+```{r}
+library(ggplot2)
+DimPlot(merged, group.by = "cluster_ft", label = T, repel = T, label.size = 4) +
+    theme(aspect.ratio = 1) 
+```
+
+```{r}
+ref.fibroblast <- make.reference(ref = merged, ndim = ndim, seed = seed, recalculate.umap = TRUE,
+    annotation.column = "cluster_ft")
+DimPlot(ref.fibroblast, label = T, repel = T, label.size = 4) + theme(aspect.ratio = 1) 
+```
+
+```{r}
+saveRDS(ref.fibroblast, "ref.fibroblast.rds")
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q highmem
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=500GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(Seurat)
+library(scGate)
+library(ProjecTILs)
+library(Matrix)
+
+ref.fibroblast <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/ref.fibroblast.rds")
+HNSC_combined <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/HNSC_combined.rds")
+fibroblast <- subset(HNSC_combined, scGate_multi == "Fibroblast")
+fibroblast <- ProjecTILs.classifier(query = fibroblast, ref = ref.fibroblast, filter.cells = F)
+
+saveRDS(HNSC_combined, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/HNSCC_fibroblast.rds")
+```
+
+```{r}
+HNSC_combined <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/HNSC_combined.rds")
+fibroblast <- subset(HNSC_combined, scGate_multi == "Fibroblast")
+fibroblast <- ProjecTILs.classifier(query = fibroblast, ref = ref.fibroblast, filter.cells = F)
+```
+
+```{r}
+cd4tcell<- subset(cd4tcell, subset = Dataset != c("Kurten"))
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/graphs")
+                                                   
+#color <-c("CD4.CTL_EOMES"= "#8dd3c7","CD4.CTL_Exh"  = "#ffffb3","CD4.CTL_GNLY" = "#bebada","CD4.NaiveLike"= "#fccde5","CD4.Tfh" = "#80b1d3","CD4.Th17"  = "#fdb462","CD4.Treg" = "#b3de69")
+
+metadata <- na.omit(data.frame(Cluster = cd4tcell@meta.data$CD4Type, Group = cd4tcell@meta.data$Group, HPV = cd4tcell@meta.data$HPV, Dataset = cd4tcell@meta.data$Dataset))
+
+
+  metadata$Category <- str_c(metadata$HPV, "_", metadata$Group)
+  split.object <- split(metadata, metadata$Category) 
+
+  plot.list <- list()
+  for (i in 1:length(split.object)) {
+  library(dplyr)
+    plot.list[[i]] <- split.object[[i]] %>%
+    group_by(HPV, Group, Cluster) %>%
+    dplyr::summarize(n = n()) %>% 
+    mutate(pct = round(n/sum(n), digits = 3),
+    lbl = scales::percent(pct))
+  }
+  names(plot.list) <- names(split.object)
+  
+  grouping <- do.call(rbind.data.frame, plot.list)
+  
+  theme_set(theme_minimal())  
+  theme_update(axis.text.x = element_text(size = 6))
+  ggplot(grouping, aes(x=as.factor(Group), y=pct, fill = as.factor(Cluster))) +
+  geom_col(position="fill") +
+  scale_fill_manual("Cell Type", values = color) +
+  ggtitle(c("CD4T Cell Type")) +
+  geom_text(aes(label = lbl), 
+            size = 1, 
+            position = position_fill(vjust = 0.5)) +
+  xlab("Y Expression Group") + ylab("Percent") + labs(fill = "CD4T Cell Type") +
+  facet_grid(. ~ HPV) 
+  graph <- paste0("CD4T_CellType", "_relative_number.pdf")
+  ggsave(graph)
+```

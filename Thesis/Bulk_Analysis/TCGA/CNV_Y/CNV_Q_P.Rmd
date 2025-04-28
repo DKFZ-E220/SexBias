@@ -1,0 +1,344 @@
+---
+title: "Untitled"
+output: html_document
+date: '2022-08-17'
+---
+
+Extract all the measures for the Y chromosome:
+
+```{r}
+HNSC_SegmentFiles_Y <- HNSC_SegmentFiles[HNSC_SegmentFiles$Chromosome == "Y",]
+```
+
+Divide the measures taking into consideration if they belong to the p or q arm:
+
+```{r}
+HNSC_SegmentFiles_Y_p <- HNSC_SegmentFiles_Y[HNSC_SegmentFiles_Y$Start > 1 & HNSC_SegmentFiles_Y$End < 10400000, ]
+```
+
+```{r}
+HNSC_SegmentFiles_Y_q <- HNSC_SegmentFiles_Y[HNSC_SegmentFiles_Y$Start > 10400001 & HNSC_SegmentFiles_Y$End < 57227415, ]
+```
+
+Calculating chromosome index for these regions:
+
+# Processing of the data:
+
+## Obtaining CNI
+
+Create Sizes for the segments: Chromosome End - Chromosome Star:
+
+```{r}
+HNSC_SegmentFiles_Y_p$Size <- HNSC_SegmentFiles_Y_p$End - HNSC_SegmentFiles_Y_p$Start
+```
+
+Look for patients that have more than one sample and cleaning it up:
+
+```{r}
+patients <- split(HNSC_SegmentFiles_Y_p, f = HNSC_SegmentFiles_Y_p$Sample )
+```
+
+Giving patients the same ID as other datasets:
+
+```{r}
+name <- names(patients)
+```
+
+```{r}
+name <- substring(name, 1, 12)
+```
+
+```{r}
+name <- gsub("-", ".", name)
+```
+
+```{r}
+duplicated(name) 
+```
+
+```{r}
+name[164]
+```
+
+
+Taking out duplicated data:
+
+```{r}
+HNSC_SegmentFiles_Y_p <- HNSC_SegmentFiles_Y_p[HNSC_SegmentFiles_Y_p$Sample != "TCGA-CV-6955-01A-11D-2062-01",]
+```
+
+Renaming the patients with an ID matching the metadata:
+
+```{r}
+HNSC_SegmentFiles_Y_p$Sample <- substring(HNSC_SegmentFiles_Y_p$Sample, 1, 12)
+HNSC_SegmentFiles_Y_p$Sample <- gsub("-", ".", HNSC_SegmentFiles_Y_p$Sample)
+```
+
+### In male patients
+
+Selecting the male patients:
+
+```{r}
+SegmentFiles_Y_p <- HNSC_SegmentFiles_Y_p[HNSC_SegmentFiles_Y_p$Sample %in% male_ID$Patient_ID,]
+```
+
+Unlogging the segment_mean variable to obtain Copy Number:
+
+```{r}
+SegmentFiles_Y_p$Unlog_Segment <- 2^(1+SegmentFiles_Y_p$Segment_Mean)
+```
+
+Weighting the segment_mean by the sizes of the segments:
+
+```{r}
+SegmentFiles_Y_p$Weighted_value <- SegmentFiles_Y_p$Unlog_Segment*SegmentFiles_Y_p$Size
+```
+
+Separating the patients in a list in order for the loop to work:
+
+```{r}
+patients_male <- split(SegmentFiles_Y_p, f = SegmentFiles_Y_p$Sample )
+```
+
+Loop that calculates the average Copy Number Index per Chromosome inside each patient:
+
+```{r}
+ID <- names(patients_male)
+a <- c(1:22, "X", "Y")
+x <- list()
+for (h in (1:length(patients_male))) {
+  vec <- c()
+  for (i in a) {
+    mean <- sum(patients_male[[h]]$Weighted_value[patients_male[[h]]$Chromosome %in% i])/sum(patients_male[[h]]$Size[patients_male[[h]]$Chromosome %in% i])
+    vec <- c(vec,mean)
+  }
+  names(vec) <- c(1:22, "X", "Y")
+  x[[paste0(ID[h])]] <- vec
+}
+
+```
+
+Unlisting the result to obtain a data frame with the CNI for each Chromosome for each patient:
+
+```{r}
+chrom_male <- do.call(rbind.data.frame, x)
+colnames(chrom_male) <- a
+rownames(chrom_male) <- ID
+```
+
+```{r}
+chrom_male <- chrom_male[,c(-(1:23))]
+```
+
+```{r}
+chrom_male <- as.data.frame(chrom_male)
+rownames(chrom_male) <- ID
+colnames(chrom_male) <- c("Y_p")
+```
+
+
+
+Plotting the CNI for all the Male patients:
+
+```{r}
+den <- density(chrom_male$Y_p)
+plot(den)
+```
+```{r}
+which.max(den$y)
+den$x[108]
+```
+
+
+```{r}
+which.max(den$y[den$x < 0.75])
+den$x[72]
+```
+
+```{r}
+chrom_male$ID <- rownames(chrom_male) 
+```
+
+```{r}
+P_Loss <- as.data.frame(chrom_male[chrom_male$Y_p < 0.6321037,])
+```
+
+```{r}
+i <- which(male_ID$Patient_ID %in% rownames(P_Loss))
+i
+```
+
+```{r}
+P_Loss <- c(1:length(male_ID$Patient_ID))
+P_Loss[i] <- c("Yes")
+P_Loss[-i] <- c("No")
+```
+
+```{r}
+male_ID$P_Loss <- P_Loss
+```
+
+# Processing of the data:
+
+## Obtaining CNI
+
+Create Sizes for the segments: Chromosome End - Chromosome Star:
+
+```{r}
+HNSC_SegmentFiles_Y_q$Size <- HNSC_SegmentFiles_Y_q$End - HNSC_SegmentFiles_Y_q$Start
+```
+
+Look for patients that have more than one sample and cleaning it up:
+
+```{r}
+patients <- split(HNSC_SegmentFiles_Y_q, f = HNSC_SegmentFiles_Y_q$Sample )
+```
+
+Giving patients the same ID as other datasets:
+
+```{r}
+name <- names(patients)
+```
+
+```{r}
+name <- substring(name, 1, 12)
+```
+
+```{r}
+name <- gsub("-", ".", name)
+```
+
+```{r}
+duplicated(name) 
+```
+
+```{r}
+name[173]
+```
+
+
+Taking out duplicated data:
+
+```{r}
+HNSC_SegmentFiles_Y_q <- HNSC_SegmentFiles_Y_q[HNSC_SegmentFiles_Y_q$Sample != "TCGA-CV-6955-01A-11D-2062-01",]
+```
+
+Renaming the patients with an ID matching the metadata:
+
+```{r}
+HNSC_SegmentFiles_Y_q$Sample <- substring(HNSC_SegmentFiles_Y_q$Sample, 1, 12)
+HNSC_SegmentFiles_Y_q$Sample <- gsub("-", ".", HNSC_SegmentFiles_Y_q$Sample)
+```
+
+### In male patients
+
+Selecting the male patients:
+
+```{r}
+SegmentFiles_Y_q <- HNSC_SegmentFiles_Y_q[HNSC_SegmentFiles_Y_q$Sample %in% male_ID$Patient_ID,]
+```
+
+Unlogging the segment_mean variable to obtain Copy Number:
+
+```{r}
+SegmentFiles_Y_q$Unlog_Segment <- 2^(1+SegmentFiles_Y_q$Segment_Mean)
+```
+
+Weighting the segment_mean by the sizes of the segments:
+
+```{r}
+SegmentFiles_Y_q$Weighted_value <- SegmentFiles_Y_q$Unlog_Segment*SegmentFiles_Y_q$Size
+```
+
+Separating the patients in a list in order for the loop to work:
+
+```{r}
+patients_male <- split(SegmentFiles_Y_q, f = SegmentFiles_Y_q$Sample )
+```
+
+Loop that calculates the average Copy Number Index per Chromosome inside each patient:
+
+```{r}
+ID <- names(patients_male)
+a <- c(1:22, "X", "Y")
+x <- list()
+for (h in (1:length(patients_male))) {
+  vec <- c()
+  for (i in a) {
+    mean <- sum(patients_male[[h]]$Weighted_value[patients_male[[h]]$Chromosome %in% i])/sum(patients_male[[h]]$Size[patients_male[[h]]$Chromosome %in% i])
+    vec <- c(vec,mean)
+  }
+  names(vec) <- c(1:22, "X", "Y")
+  x[[paste0(ID[h])]] <- vec
+}
+
+```
+
+Unlisting the result to obtain a data frame with the CNI for each Chromosome for each patient:
+
+```{r}
+chrom_male <- do.call(rbind.data.frame, x)
+colnames(chrom_male) <- a
+rownames(chrom_male) <- ID
+```
+
+```{r}
+chrom_male <- chrom_male[,c(-(1:23))]
+```
+
+```{r}
+chrom_male <- as.data.frame(chrom_male)
+rownames(chrom_male) <- ID
+colnames(chrom_male) <- c("Y_q")
+```
+
+
+
+Plotting the CNI for all the Male patients:
+
+```{r}
+den <- density(chrom_male$Y_q)
+plot(den)
+```
+```{r}
+which.max(den$y)
+den$x[108]
+```
+
+
+```{r}
+which.max(den$y[den$x < 0.75])
+den$x[111]
+```
+
+```{r}
+chrom_male$ID <- rownames(chrom_male) 
+```
+
+```{r}
+Q_Loss <- as.data.frame(chrom_male[chrom_male$Y_q < 0.572527,])
+```
+
+```{r}
+i <- which(male_ID$Patient_ID %in% rownames(Q_Loss))
+i
+```
+
+```{r}
+Q_Loss <- c(1:length(male_ID$Patient_ID))
+Q_Loss[i] <- c("Yes")
+Q_Loss[-i] <- c("No")
+```
+
+```{r}
+male_ID$Q_Loss <- Q_Loss
+```
+
+
+```{r}
+table(male_ID$P_Loss, male_ID$Q_Loss)
+```
+
+```{r}
+write_csv(male_ID, "Q_P_Loss.csv")
+```

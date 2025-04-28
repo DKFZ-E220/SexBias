@@ -1,0 +1,269 @@
+```{r}
+TCGA_EDY_LOY <- read.csv("~/Desktop/TAC/Codigo_TAC/TCGA_EDY_LOY.cvs")
+```
+
+```{r}
+Male <- TCGA_EDY_LOY[TCGA_EDY_LOY$Gender == "Male",]
+```
+
+
+```{r}
+immune_pathway <- read.csv("GSVA_scores_TPM.cvs")
+```
+
+```{r}
+GSVA_TPM <- read.csv("GSVA_scores_TPM.cvs")
+rownames(GSVA_TPM) <- GSVA_TPM$X
+```
+
+```{r}
+GSVA_TPM <- GSVA_TPM[,c(-1)]
+```
+
+```{r}
+h <-  which(colnames(GSVA_TPM) %in% Male$Patient_ID)
+j <- which(Male$Patient_ID %in% colnames(GSVA_TPM))
+
+Gsva_final <- as.data.frame(GSVA_TPM[,h])
+Metadata_final <- Male[j,]
+```
+
+```{r}
+Scores <- rbind(Gsva_final,Metadata_final$GSVA_Y_Score)
+```
+
+```{r}
+rownames(Scores)[22] <- c("Y_CHR_SCORE")
+```
+
+
+We compute the Spearman correlations between the pathways:
+
+```{r}
+library(ggplot2)
+library(reshape2)
+library(Hmisc)
+library(stats)
+```
+
+```{r}
+library(knitr) 
+library(tidyverse, warn.conflict=F)
+```
+
+```{r}
+cors <- function(df) {
+  M <- Hmisc::rcorr(as.matrix(df), type = c("spearman"))
+  # turn all three matrices (r, n, and P into a data frame)
+  Mdf <- map(M, ~data.frame(.x))
+  # return the three data frames in a list
+  return(Mdf)
+}
+```
+
+```{r}
+formatted_cors <- function(df){
+ cors(df) %>%
+ map(~rownames_to_column(.x, var="measure1")) %>%
+ map(~pivot_longer(.x, -measure1, "measure2")) %>% 
+ bind_rows(.id = "id") %>%
+ pivot_wider(names_from = id, values_from = value) %>%
+ mutate(sig_p = ifelse(P < .05, T, F), p_if_sig = ifelse(P <.05, P, NA), r_if_sig = ifelse(P <.05, r, NA)) 
+}
+```
+
+Plot the Spearman's correlation:
+
+```{r}
+formatted_cors(t(Scores)) %>% 
+ ggplot(aes(measure1, measure2, fill=r, label=round(r_if_sig,2))) +
+ geom_tile() +
+ labs(x = NULL, y = NULL, fill = "Spearman's\nCorrelation", title="Correlations in GSVA scores for different pathways", subtitle="Only significant Spearman's correlation coefficients shown") +
+ scale_fill_gradient2(mid="#FBFEF9",low="#0C6291",high="#A63446", limits=c(-1,1)) +
+ geom_text() +
+ theme_classic() +
+ scale_x_discrete(expand=c(0,0)) + 
+ scale_y_discrete(expand=c(0,0)) 
+```
+
+```{r}
+cibersort_AB <- read_xlsx("TCGA_HNC_AB.xlsx")
+cibersort_AB$`Input Sample` <- gsub(".01", "", cibersort_AB$`Input Sample`)
+cibersort_AB$`Input Sample` <- gsub("-", ".", cibersort_AB$`Input Sample`)
+rownames <- cibersort_AB$`Input Sample`
+cibersort_AB <- cibersort_AB[,c(-1)]
+rownames(cibersort_AB) <- rownames
+cibersort_AB <- data.frame(t(cibersort_AB))
+cibersort_AB <- cibersort_AB[ , order(names(cibersort_AB))]
+```
+
+```{r}
+cibersort_AB_LoY <- rbind(cibersort_AB, TCGA_EDY_LOY$LoY)
+```
+
+```{r}
+rownames(cibersort_AB)
+```
+```{r}
+AB <- as.data.frame(t(cibersort_AB_LoY))
+```
+
+```{r}
+colnames(AB)[27] <- "LoY"
+```
+
+```{r}
+AB[1:26] <- sapply(AB[1:26], as.numeric)
+```
+
+```{r}
+AB %>% group_by(LoY) %>%
+  summarise(n=n(),
+            B_cells_naive = mean(`B cells naive`),
+            B_cells_memory = mean(`B cells memory`), 
+            Plasma_cells = mean(`Plasma cells`),
+            T_cells_CD8 = mean(`T cells CD4 naive`),                 
+            T_cells_CD4_naive = mean(`T cells CD4 naive`),
+            T_cells_CD4_memory_resting = mean(`T cells CD4 memory resting`),
+            T_cells_CD4_memory_activated = mean(`T cells CD4 memory activated`),
+            T_cells_follicular_helper = mean(`T cells follicular helper`),   
+            T_cells_regulatory_Tregs = mean(`T cells regulatory (Tregs)`),
+            T_cells_gamma_delta = mean(`T cells gamma delta`),
+            NK_cells_resting = mean(`NK cells resting`),
+            NK_cells_activated = mean(`NK cells activated`),
+            Monocytes = mean(Monocytes),
+            Macrophages_M0 = mean(`Macrophages M0`),              
+            Macrophages_M1 = mean(`Macrophages M1`),               
+            Macrophages_M2 = mean(`Macrophages M2`),              
+            Dendritic_cells_resting = mean(`Dendritic cells resting`),
+            Dendritic_cells_activated = mean(`Dendritic cells activated`),  
+            Mast_cells_resting = mean(`Mast cells resting`),
+            Mast_cells_activated = mean(`Mast cells activated`),
+            Eosinophils = mean(Eosinophils),
+            Neutrophils = mean(Neutrophils)) %>% 
+  gather("key", "value", - c(LoY, n)) %>%
+  ggplot(aes(x = LoY, y = value, group = key, fill = key)) + geom_col() + ggtitle("Cibersort X scores")
+```
+
+```{r}
+scores_immune_signatures <- read.csv("HNC_immune_signatures.cvs")
+```
+
+```{r}
+rownames(scores_immune_signatures) <- scores_immune_signatures$X
+scores_immune_signatures <- scores_immune_signatures[,-1]
+```
+
+```{r}
+scores_immune_signatures <- rbind(scores_immune_signatures, TCGA_EDY_LOY$GSVA_Y_Score)
+```
+
+```{r}
+rownames(scores_immune_signatures)[29] <- c("Y_CHR_SIGNATURE")
+```
+
+```{r}
+
+formatted_cors(t(scores_immune_signatures)) %>% 
+ ggplot(aes(measure1, measure2, fill=r, label=round(r_if_sig,2))) +
+ geom_tile() +
+ labs(x = NULL, y = NULL, fill = "Spearman's\nCorrelation", title="Correlations immune signatures and Y Chromosome Signature", subtitle="Only significant Spearman's correlation coefficients shown") +
+ scale_fill_gradient2(mid="#FBFEF9",low="#0C6291",high="#A63446", limits=c(-1,1)) +
+ geom_text() +
+ theme_classic() +
+ scale_x_discrete(expand=c(0,0)) + 
+ scale_y_discrete(expand=c(0,0)) 
+```
+
+
+```{r}
+xCell_data <- read_xlsx("HNSCC_x_Cell.xlsx")
+rownames(xCell_data) <- xCell_data$Cells
+```
+
+```{r}
+i <-  which(colnames(xCell_data) %in% TCGA_EDY_LOY$Patient_ID)
+j <-  which(TCGA_EDY_LOY$Patient_ID %in% colnames(xCell_data))
+
+MET_DAT <- TCGA_EDY_LOY[j,]
+xCell_data_new <- xCell_data[,i]
+```
+
+```{r}
+rownames(xCell_data_new) <- xCell_data$Cells
+```
+
+
+```{r}
+xCell_immune <- xCell_data_new[c("B-cells", "Basophils", "CD4+ memory T-cells","CD4+ naive T-cells", "CD4+ T-cells", "CD4+ Tcm", "CD4+ Tem", "CD8+ naive T-cells", "CD8+ T-cells", "CD8+ Tcm", "CD8+ Tem", "Class-switched memory B-cells","Eosinophils", "Macrophages", "Macrophages M1", "Macrophages M2", "Mast cells", "Megakaryocytes", "Memory B-cells", "MEP", "Monocytes", "naive B-cells", "Neutrophils", "NK cells", "NKT", "pro B-cells", "Tgd cells", "Th1 cells", "Th2 cells","Tregs"),]
+rownames(xCell_immune) <- c("B-cells", "Basophils", "CD4+ memory T-cells","CD4+ naive T-cells", "CD4+ T-cells", "CD4+ Tcm", "CD4+ Tem", "CD8+ naive T-cells", "CD8+ T-cells", "CD8+ Tcm", "CD8+ Tem", "Class-switched memory B-cells","Eosinophils", "Macrophages", "Macrophages M1", "Macrophages M2", "Mast cells", "Megakaryocytes", "Memory B-cells", "MEP", "Monocytes", "naive B-cells", "Neutrophils", "NK cells", "NKT", "pro B-cells", "Tgd cells", "Th1 cells", "Th2 cells","Tregs")
+```
+
+```{r}
+xCell_data_new <- xCell_data_new[ , order(names(xCell_data_new))]
+```
+
+```{r}
+rownames(xCell_immune) <- c("B-cells", "Basophils", "CD4+ memory T-cells","CD4+ naive T-cells", "CD4+ T-cells", "CD4+ Tcm", "CD4+ Tem", "CD8+ naive T-cells", "CD8+ T-cells", "CD8+ Tcm", "CD8+ Tem", "Class-switched memory B-cells","Eosinophils", "Macrophages", "Macrophages M1", "Macrophages M2", "Mast cells", "Megakaryocytes", "Memory B-cells", "MEP", "Monocytes", "naive B-cells", "Neutrophils", "NK cells", "NKT", "pro B-cells", "Tgd cells", "Th1 cells", "Th2 cells","Tregs")
+```
+
+```{r}
+xcell <- rbind(xCell_immune, MET_DAT$LoY)
+```
+
+
+```{r}
+xcell  <- as.data.frame(t(xcell))
+```
+
+```{r}
+colnames(xcell)[31] <- "LoY"
+```
+
+```{r}
+xcell[1:30] <- sapply(xcell[1:30], as.numeric)
+```
+
+```{r}
+colnames(xcell)
+```
+
+
+```{r}
+xcell %>% group_by(LoY) %>%
+  summarise(n=n(),
+            B_cells = mean(`B-cells`),
+            Basophils = mean(Basophils),
+            CD4_memory_T_cells = mean(`CD4+ memory T-cells`),           
+            CD4_naive_T_cells = mean(`CD4+ naive T-cells`),
+            CD4_T_cells = mean(`CD4+ T-cells`),
+            CD4_Tcm = mean(xcell$`CD4+ Tcm`),                     
+            CD4_Tem = mean(xcell$`CD4+ Tem`),
+            CD8_naive_T_cells = mean(xcell$`CD8+ naive T-cells`),
+            CD8_T_cells = mean(`CD8+ T-cells`),
+            CD8_Tcm = mean(`CD8+ Tcm`),
+            CD8_Tem = mean(`CD8+ Tem`),
+            Class_switched_memory_B_cells = mean(xcell$`Class-switched memory B-cells`),
+            Eosinophils = mean(Eosinophils),
+            Macrophages = mean(Macrophages),
+            Macrophages_M1 = mean(`Macrophages M1`),
+            Macrophages_M2 = mean(`Macrophages M2`),
+            Mast_cells = mean(`Mast cells`),
+            Megakaryocytes = mean(Megakaryocytes),
+            Memory_B_cells = mean(`Memory B-cells`),
+            MEP = mean(MEP),
+            Monocytes = mean(Monocytes),
+            naive_B_cells = mean(`naive B-cells`),
+            Neutrophils = mean(Neutrophils),                  
+            NK_cells   = mean(`NK cells`),                  
+            NKT = mean(NKT),                          
+            pro_B_cells  = mean(`pro B-cells`),              
+            Tgd_cells = mean(`Tgd cells`),
+            Th1_cells = mean(`Th1 cells`),
+            Th2_cells = mean(`Th2 cells`),
+            Tregs = mean(Tregs)) %>% 
+  gather("key", "value", - c(LoY, n)) %>%
+  ggplot(aes(x = LoY, y = value, group = key, fill = key)) + geom_col() + ggtitle("xCell scores")
+```
+```
+

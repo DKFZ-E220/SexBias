@@ -1,0 +1,243 @@
+---
+title: "EDY Analysis CCLine for AdenoCar-lung"
+author: "Cristina Conde López"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_depth: '4'
+    df_print: paged
+  pdf_document:
+    toc: yes
+    toc_depth: 4
+  prettydoc::html_pretty:
+    toc: yes
+    theme: hpstr
+    highlight: github
+    number_sections: yes
+subtitle: Stablishing EDY status
+editor_options:
+  chunk_output_type: inline
+---
+
+# Obtain the Data from XenaBrowser
+
+## Raw count data
+
+This data was downloaded on the 24th of February 2022 from the Xenabrowser using R tool fread() from the following link: 
+https://data.broadinstitute.org/ccle/CCLE_DepMap_18Q2_RNAseq_reads_20180502.gct.
+
+```{r, message=FALSE}
+library(readr)
+cell_counts <- read_csv("cell_counts.cvs")
+```
+
+Preparing the raw count data so it's readable for the pipeline
+
+```{r}
+cell_counts <- aggregate(. ~ Description, data = cell_counts, max)
+cell_counts1 <- cell_counts[,c(-1,-2)]
+cell_counts1 <- as.data.frame(cell_counts1)
+```
+
+## Clinical data
+
+We upload the curated metadata info extrated from the LoY pipeline for lung SCC:
+
+```{r, message=FALSE, warning=FALSE}
+LoY <- read_csv("LoY_cell_info_lung_adenocar.cvs")
+rownames(LoY) <- LoY$CCLE_Name
+```
+
+We extract the selected samples from the count file:
+
+```{r}
+i <- which(colnames(cell_counts1) %in% rownames(LoY))
+cell_counts_HN <- cell_counts1[,i]
+```
+
+```{r}
+rownames(cell_counts_HN) <- cell_counts$Description
+```
+
+
+# EDY status calculation
+
+## Creating an ExpressionSet object from the Data
+
+```{r, message=FALSE}
+library(Biobase)
+```
+
+There's one sample for which there's no count data, we check the name of the sample and take it out of the clinical dataset so the pipeline works.
+
+```{r}
+LoY[28,]
+```
+
+Clinical data is stored as an AnnotatedDataFrame object, this would be the "phenotypic data" in the ExpressionSet object. In this case we need to 
+
+```{r}
+pData <- AnnotatedDataFrame(LoY[-28,])
+rownames(pData) <- LoY$CCLE_Name[-28]
+```
+
+Transforming the data frame of counts into a matrix so it's readable for the ExpressionSet() function:
+
+```{r}
+exprs <- as.matrix(cell_counts_HN)
+```
+
+Checking all the samples are the same in phenotypic and count data:
+
+```{r}
+all(rownames(pData) == colnames(exprs))
+```
+
+In the featureData part of the ExpressionSet object we store the **Gene Symbols** which correspond to the rownames of the counts dataframe:
+
+```{r}
+featureData <- as.data.frame(row.names(cell_counts_HN))
+rownames(featureData) <- row.names(cell_counts_HN)
+colnames(featureData) <- c("Symbol")
+```
+
+With all this information we create the Expression Set object:
+
+```{r}
+exampleSet <- ExpressionSet(assayData=exprs, phenoData=pData, featureData = AnnotatedDataFrame(featureData))
+```
+
+## Calculation of EDY
+
+
+```{r}
+#Add column with the hgnc symbol information to fData
+fData(exampleSet)$id.feature <- featureNames(exampleSet)
+```
+        
+```{r}
+annot.expr <- fData(exampleSet)
+```
+
+```{r}
+gene.expr <- exprs(exampleSet)[rownames(exprs(exampleSet))%in%annot.expr$id.feature,]
+      #Replace gene ID for hgnc symbol
+      rownames(gene.expr) <- annot.expr[, "Symbol"]
+      #Select those genes that belong to chrY
+      exprY <- gene.expr[annot.expr[, "Symbol"]%in%EDY::chrY.genes$hgnc_symbol,]
+      exprY <- exprY[complete.cases(exprY),]
+      #Select those genes that belong to the rest of the genome
+      exprRef <- gene.expr[annot.expr[, "Symbol"]%in%EDY::autosomal.genes$hgnc_symbol,]
+      exprRef <- exprRef[complete.cases(exprRef),]
+```
+
+
+```{r}
+#Convert expression sets into numeric since they came out as character
+exprY <- as.data.frame(apply( exprY, 2, as.numeric))
+exprRef <- as.data.frame(apply(exprRef, 2, as.numeric))
+```
+
+```{r}
+#Apply EDY formulae: 
+Ry <- sweep(log2(exprY+1), 2, FUN="-", 
+                apply(log2(exprRef+1), 2, mean))
+EDYcontinuous <- apply(Ry, 2, mean)
+```
+
+```{r}
+# Establish the control group, in this case males known for having no LoY
+controls <- EDYcontinuous[pData(exampleSet)[,"LoY"]=="No"]
+```
+
+```{r}
+# Establish from the cutoff value cases with EDY
+thresh <- median(controls, na.rm=TRUE) - 1.2*IQR(controls, na.rm=TRUE)
+  EDY <- cut(EDYcontinuous, c(-Inf, thresh, Inf), 
+             labels = c("Yes", "No"))
+  EDY <- relevel(EDY, 2)
+```
+
+```{r}
+# Build the output
+pData(exampleSet)$EDY <- EDY
+    names(EDY) <- names(EDYcontinuous)
+    ans <- list(EDY=EDY, EDYcontinuous=EDYcontinuous, 
+                threshold=thresh)
+```
+
+```{r}
+EDY <- ans$EDY
+```
+
+```{r}
+EDYLoY <- cbind(LoY[-28,], EDY)
+```
+
+```{r}
+table(EDYLoY$EDY)
+```
+
+```{r}
+table(EDYLoY$LoY)
+```
+
+```{r}
+table(EDYLoY$LoY, EDYLoY$EDY)
+```
+
+```{r}
+write_csv(EDYLoY, "Cell_EDYLoY_lung_adenocar.cvs")
+```
+
+Creating a dataset from the list obtained in the result:
+
+```{r}
+ans1 <- do.call(rbind.data.frame, ans)
+```
+
+```{r}
+colnames(ans1) <- colnames(cell_counts_HN)
+rownames(ans1) <- c("EDY", "EDYcontinuous", "Threshold")
+```
+
+# Y chromosome signature expression
+
+We now check for the expression of our Y chromosome signature overlapping with the computed status of EDY and LoY
+
+First we stablish the signature:
+
+```{r}
+Y_sig <- c("DDX3Y",	"EIF1AY",	"KDM5D",	"NLGN4Y",	"RPS4Y1",	"SRY",	"TBL1Y",	"TMSB4Y","USP9Y",	"UTY",	"ZFY")
+```
+
+Select the genes for the count table and prepare the count table to be read by the pheatmap() function:
+
+```{r}
+i <- which(rownames(cell_counts_HN) %in%  Y_sig)
+counts_Y <- cell_counts_HN[i,]
+```
+
+
+```{r}
+names <- rownames(counts_Y)
+counts_Y <- as.data.frame(apply( counts_Y, 2, as.numeric))
+rownames(counts_Y) <- names
+```
+
+
+```{r}
+annoCol<-list(LoY= c(No= "palegreen2", Yes = "palevioletred1"), EDY = c(No = "skyblue1", Yes ="sandybrown"))
+ library(pheatmap)
+  choose_matrix=counts_Y
+  #choose_matrix[1:4,1:4]
+  choose_matrix=t(scale(t(log2(choose_matrix+1))))  
+  ## http://www.bio-info-trainee.com/1980.html
+  annotation_col = data.frame(LoY = EDYLoY$LoY, EDY = EDYLoY$EDY)
+  rownames(annotation_col)=colnames(counts_Y)
+  pheatmap(choose_matrix,show_colnames = F,annotation_col = annotation_col, show_rownames = T, annotation_colors = annoCol
+          ,filename = 'CellLine_LOY_EDY_Signature_lung_adenocar.png'
+           )
+  
+```

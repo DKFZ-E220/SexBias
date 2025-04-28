@@ -1,0 +1,253 @@
+---
+title: "CNV Analysis CCLine for SCC"
+subtitle: "Obtatining Copy Number Index"
+author: "Cristina Conde López"
+date: "`r Sys.Date()`"
+output: 
+ prettydoc::html_pretty:
+    toc: true
+    theme: hpstr
+    highlight: github
+    number_sections: true
+ pdf_document:
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+---
+
+# Obtain the Data from cBioportal
+
+## CNV data
+
+This data was downloaded on the 22nd of February 2022 from the Xenabrowser using R tool download.file from the following link: 
+https://data.broadinstitute.org/ccle_legacy_data/dna_copy_number/CCLE_copynumber_2013-12-03.seg.txt.
+
+```{r}
+Segment_cell <- read.table("cBiosegmentdata.txt", sep = "\t" )
+```
+
+## Clinical data
+
+This data was downloaded on the 22nd of February 2022 from the Xenabrowser using R tool download.file from the following link: 
+https://data.broadinstitute.org/ccle_legacy_data/cell_line_annotations/CCLE_sample_info_file_2012-10-18.txt.
+
+```{r}
+Clinical_cell <- read.table("cBioclinicaldata.txt", sep = "\t" )
+```
+
+From the same portal we generate a file which has the names for the Upper Aerodigestive Track samples:
+
+```{r}
+hn_samples <- read.table("hnn_sample.txt", sep = "\t" )
+```
+
+## Selecting samples of interest
+
+We select those samples that are of interest:
+
+```{r}
+# Which are Upper Aerodigestive Track samples
+i <- which(Clinical_cell$V1 %in% hn_samples$V1)
+hn_clinical <- Clinical_cell[i,] 
+```
+
+```{r}
+# Select the male samples which come from squamous cell carcinoma
+hn_cell_male <- hn_clinical[hn_clinical$V4 == "M",]
+hn_cell_male <- hn_cell_male[hn_cell_male$V7 == "squamous_cell_carcinoma",]
+```
+
+
+```{r}
+# Select the segmented data for this samples
+i <- which(Segment_cell$V1 %in% hn_cell_male$V1)
+hn_segmented <- Segment_cell[i,] 
+```
+
+```{r}
+colnames(hn_segmented) <- Segment_cell[1,]
+```
+
+# Processing of the data:
+
+## Obtaining CNI
+
+Create Sizes for the segments: Chromosome End - Chromosome Star:
+
+```{r}
+hn_segmented[3:4] <- lapply(hn_segmented[3:4], as.numeric)
+```
+
+```{r}
+hn_segmented$Size <- hn_segmented$End - hn_segmented$Start
+```
+
+Unlogging the segment_mean variable to obtain Copy Number:
+
+```{r}
+hn_segmented[6] <- lapply(hn_segmented[6], as.numeric)
+```
+
+```{r}
+hn_segmented$Unlog_Segment <- 2^(1+hn_segmented$Segment_Mean)
+```
+
+Weighting the segment_mean by the sizes of the segments:
+
+```{r}
+hn_segmented$Weighted_value <- hn_segmented$Unlog_Segment*hn_segmented$Size
+```
+
+Separating the samples in a list in order for the loop to work:
+
+```{r}
+cells <- split(hn_segmented, f = hn_segmented$CCLE_name)
+```
+
+Loop that calculates the average Copy Number Index per Chromosome inside each sample:
+
+```{r}
+ID <- names(cells)
+a <- c(1:22, "X", "Y")
+x <- list()
+for (h in (1:length(cells))) {
+  vec <- c()
+  for (i in a) {
+    mean <- sum(cells[[h]]$Weighted_value[cells[[h]]$Chromosome %in% i])/sum(cells[[h]]$Size[cells[[h]]$Chromosome %in% i])
+    vec <- c(vec,mean)
+  }
+  names(vec) <- c(1:22, "X", "Y")
+  x[[paste0(ID[h])]] <- vec
+}
+
+```
+
+Unlisting the result to obtain a data frame with the CNI for each Chromosome for each sample:
+
+```{r}
+chrom_cells <- do.call(rbind.data.frame, x)
+colnames(chrom_cells) <- a
+rownames(chrom_cells) <- ID
+```
+
+Plotting the Y chromosome index for all samples:
+
+```{r}
+den <- density(chrom_cells$Y)
+plot(den, xlim = c(0,2))
+```
+
+```{r}
+which.max(den$y)
+den$x[107]
+```
+
+```{r}
+LoY <- chrom_cells[chrom_cells$Y < 0.5,]
+```
+
+```{r}
+i <- which(rownames(chrom_cells) %in% rownames(LoY))
+i
+```
+
+```{r}
+LoY <- c(1:length(chrom_cells))
+LoY[i] <- c("Yes")
+LoY[-i] <- c("No")
+```
+
+```{r}
+LoY <- as.data.frame(LoY)
+```
+
+```{r}
+rownames(LoY) <- rownames(chrom_cells)
+```
+
+```{r}
+LoY$Cell_Lines <- gsub("_.*","",rownames(LoY))
+```
+
+```{r}
+LoY <- LoY[order(LoY$Cell_Lines),]
+```
+
+```{r}
+library(readr)
+sample_info <- read_csv("sample_info.csv")
+```
+
+```{r}
+i <- which(sample_info$stripped_cell_line_name %in% LoY$Cell_Lines)
+```
+
+```{r}
+LoY_info <- sample_info[i,]
+```
+
+```{r}
+LoY_info <- LoY_info[order(LoY_info$stripped_cell_line_name),]
+```
+
+
+```{r}
+LoY$sample_collection_site <- LoY_info$sample_collection_site
+LoY$sex <- LoY_info$sex
+LoY$primary_disease <- LoY_info$primary_disease
+LoY$Subtype <- LoY_info$Subtype
+LoY$primary_or_metastasis <- LoY_info$primary_or_metastasis
+```
+
+```{r}
+write_csv(LoY, "LoY_cell_info.cvs")
+```
+
+Taking a look into those samples which have a Y Chromosome Index higher than 1: 
+
+```{r}
+chromcellY <- chrom_cells[chrom_cells$Y > 1, ]
+```
+
+```{r}
+i <- which(Clinical_cell$V1 %in% rownames(chromcellY))
+```
+
+```{r}
+Clinical_cell[i,]$V2
+```
+
+Taking a look into those samples which have a Y Chromosome Index lower than 1 and higher than 0.5: 
+
+```{r}
+chromcellhalfY <- chrom_cells[chrom_cells$Y < 1 & chrom_cells$Y > 0.5, ]
+```
+
+```{r}
+i <- which(Clinical_cell$V1 %in% rownames(chromcellhalfY))
+```
+
+```{r}
+Clinical_cell[i,]$V2
+```
+
+Taking a look into those samples which have a Y Chromosome Index lower than 0.5:
+
+```{r}
+chromcellnoY <- chrom_cells[chrom_cells$Y < 0.5, ]
+```
+
+```{r}
+i <- which(Clinical_cell$V1 %in% rownames(chromcellnoY))
+```
+
+```{r}
+Clinical_cell[i,]$V2
+```
+
+```{r}
+den <- density(chrom_cells$X)
+plot(den)
+```
+

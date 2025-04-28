@@ -1,0 +1,1765 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-02-26"
+---
+
+Cancer-associated fibroblast classification in single-cell and spatial proteomics data
+
+```{r, warning=FALSE}
+library(readxl)
+TCGA_Masterfile <- read_excel("TCGA_MASTERFILE_clinical_data.xls")
+TCGA_Masterfile$Patient_ID <- gsub("-", ".", TCGA_Masterfile$Patient_ID)
+row.names(TCGA_Masterfile) <- TCGA_Masterfile$Patient_ID
+TCGA_Masterfile_EDY_LoY_PQLoss <- read.csv("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/TCGA/EDY/TCGA_Masterfile_EDY_LoY_PQLoss.csv")
+```
+
+
+```{r}
+TPM_sym <- read.table("TCGA_TPM_symbol.txt")
+```
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/scRNA-seq")
+files <- list.files()
+files <- files[-1]
+list <- list()
+for (i in 1:length(files)){
+  list[i] <- readRDS(files[i])
+}
+
+names(list)[8] <- files[1]
+```
+
+```{r}
+HNSC_combined@meta.data <- HNSC_combined@meta.data[, c("orig.ident","nCount_RNA", "nFeature_RNA", "Cells_Tumor")]
+HNSC_combined@meta.data$cluster_ft <- HNSC_combined@meta.data$Cells_Tumor
+```
+
+```{r}
+list[[3]] <- HNSCC_fibro_tumour
+```
+
+
+```{r}
+for (i in 1:length(list)){
+  list[[3]]@meta.data <- list[[3]]@meta.data[, c("orig.ident","nCount_RNA", "nFeature_RNA", "cluster_ft")]
+}
+```
+
+```{r}
+colnames(list[[2]]@meta.data)[4] <- "cluster_ft"
+```
+
+```{r}
+list[[3]]@meta.data$Cells_Tumor <- c("Fibroblast")
+```
+
+
+```{r}
+for (i in 1:length(list)){
+  list[[i]]@meta.data$cluster_ft <- as.character(list[[i]]@meta.data$cluster_ft)
+}
+```
+
+```{r}
+for (i in 1:length(list)){
+  Idents(list[[i]]) <- list[[i]]@meta.data$cluster_ft
+}
+```
+
+```{r}
+merged_object <- merge(list[[1]], y = c(list[[2]],list[[3]]) , add.cell.ids = c("HNSCC_ATLAS","BREAST_FIBRO","HNSCC_FIBRO"), project = "Fibroblast")
+```
+
+```{r}
+merged_object <- NormalizeData(merged_object)
+merged_object <- FindVariableFeatures(merged_object)
+merged_object <- ScaleData(merged_object)
+merged_object <- RunPCA(merged_object)
+merged_object <- FindNeighbors(merged_object, dims = 1:30, reduction = "pca")
+merged_object <- FindClusters(merged_object, resolution = 2, cluster.name = "unintegrated_clusters")
+merged_object <- RunUMAP(merged_object, dims = 1:30, reduction = "pca", reduction.name = "umap.unintegrated")
+```
+
+## Deconvoluting TCGA bulk data only fibroblast subtypes
+
+```{r}
+library(BayesPrism)
+bk.dat <- as.matrix(t(TPM_sym))
+```
+
+```{r}
+sc.dat <- as.matrix(merged@assays$RNA@counts)
+sc.dat <- t(sc.dat)
+```
+
+```{r}
+cell.type.labels <- Idents(merged)
+sort(table(cell.type.labels))
+```
+
+```{r}
+cell.state.labels <- Idents(merged)
+```
+
+```{r}
+plot.cor.phi (input=sc.dat,
+                         input.labels=cell.state.labels,
+                         title="cell state correlation",
+                         #specify pdf.prefix if need to output to pdf
+                         #pdf.prefix="gbm.cor.cs", 
+                         cexRow=0.2, cexCol=0.2,
+                         margins=c(2,2))
+```
+
+```{r}
+sc.stat <- plot.scRNA.outlier(
+  input=sc.dat, #make sure the colnames are gene symbol or ENSMEBL ID 
+  cell.type.labels=cell.type.labels,
+  species="hs", #currently only human(hs) and mouse(mm) annotations are supported
+  return.raw=TRUE #return the data used for plotting. 
+  #pdf.prefix="gbm.sc.stat" specify pdf.prefix if need to output to pdf
+)
+```
+
+```{r}
+bk.stat <- plot.bulk.outlier(
+  bulk.input=bk.dat,#make sure the colnames are gene symbol or ENSMEBL ID 
+    sc.input=sc.dat, #make sure the colnames are gene symbol or ENSMEBL ID 
+  cell.type.labels=cell.type.labels,
+  species="hs", #currently only human(hs) and mouse(mm) annotations are supported
+  return.raw=TRUE
+  #pdf.prefix="gbm.bk.stat" specify pdf.prefix if need to output to pdf
+)
+```
+
+```{r}
+sc.dat.filtered <- cleanup.genes (input=sc.dat,
+                                  input.type="count.matrix",
+                                    species="hs", 
+                                    gene.group=c( "Rb","Mrp","other_Rb","chrM","MALAT1","chrX","chrY") ,
+                                    exp.cells=5)
+```
+
+```{r}
+library(BayesPrism)
+library(Seurat)
+library(readxl)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast")
+
+TCGA_Masterfile <- read_excel("TCGA_MASTERFILE_clinical_data.xls")
+TCGA_Masterfile$Patient_ID <- gsub("-", ".", TCGA_Masterfile$Patient_ID)
+row.names(TCGA_Masterfile) <- TCGA_Masterfile$Patient_ID
+
+TPM_sym <- read.table("TCGA_TPM_symbol.txt")
+
+merged <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/scRNA-seq/merged.rds")
+merged <- subset(merged, subset = cluster_ft != "NA")
+Idents(merged) <- merged$cluster_ft
+
+bk.dat <- as.matrix(t(TPM_sym))
+
+sc.dat <- as.matrix(merged@assays$RNA@counts)
+sc.dat <- t(sc.dat)
+
+cell.type.labels <- rep(c("Fibroblast"), length(merged@meta.data$cluster_ft))
+
+cell.state.labels <- Idents(merged)
+
+sc.stat <- plot.scRNA.outlier(
+  input=sc.dat, #make sure the colnames are gene symbol or ENSMEBL ID 
+  cell.type.labels=cell.type.labels,
+  species="hs", #currently only human(hs) and mouse(mm) annotations are supported
+  return.raw=TRUE #return the data used for plotting. 
+  #pdf.prefix="gbm.sc.stat" specify pdf.prefix if need to output to pdf
+)
+
+bk.stat <- plot.bulk.outlier(
+  bulk.input=bk.dat,#make sure the colnames are gene symbol or ENSMEBL ID 
+    sc.input=sc.dat, #make sure the colnames are gene symbol or ENSMEBL ID 
+  cell.type.labels=cell.type.labels,
+  species="hs", #currently only human(hs) and mouse(mm) annotations are supported
+  return.raw=TRUE
+  #pdf.prefix="gbm.bk.stat" specify pdf.prefix if need to output to pdf
+)
+
+sc.dat.filtered <- cleanup.genes (input=sc.dat,
+                                  input.type="count.matrix",
+                                    species="hs", 
+                                    gene.group=c( "Rb","Mrp","other_Rb","chrM","MALAT1","chrX","chrY") ,
+                                    exp.cells=5)
+
+sc.dat.filtered.pc <-  select.gene.type (sc.dat.filtered,
+                                        gene.type = "protein_coding")
+
+saveRDS(sc.dat.filtered.pc, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/sc_dat_filtered_pc.rds")
+
+diff.exp.stat <- ct.stat.list
+
+diff.exp.stat <- get.exp.stat(sc.dat=sc.dat[,colSums(sc.dat>0)>3],# filter genes to reduce memory use
+                                          cell.type.labels=cell.type.labels,
+                                          cell.state.labels=cell.state.labels,
+                                          pseudo.count=0.1, #a numeric value used for log2 transformation. =0.1 for 10x data, =10 for smart-seq. Default=0.1.
+                                          cell.count.cutoff=50, # a numeric value to exclude cell state with number of cells fewer than this value for t test. Default=50.
+                                          n.cores=1 #number of threads
+                                          )
+
+sc.dat.filtered.pc.sig <- select.marker (sc.dat=sc.dat.filtered.pc,
+                                                  stat=diff.exp.stat,
+                                                  pval.max=0.01,
+                                                  lfc.min=0.1)
+                                                  
+myPrism <- new.prism(
+  reference=sc.dat.filtered.pc.sig, 
+  mixture=bk.dat,
+  input.type="count.matrix", 
+  cell.type.labels = cell.type.labels, 
+  cell.state.labels = cell.state.labels,
+  key=NULL,
+  outlier.cut=0.01,
+    outlier.fraction=0.1,
+)
+
+bp_res <- run.prism(prism = myPrism, n.cores=50)
+
+saveRDS(bp.res, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/bp_res.rds")
+```
+
+```{r}
+merged <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/merged_object_allcelltypes.rds")
+merged <- subset(merged, subset = cluster_ft != "NA")
+merged <- subset(merged, subset = Cells_Tumor != "NA")
+Idents(merged) <- merged$Cells_Tumor
+cell.type.labels <- as.character(merged$Cells_Tumor)
+cell.state.labels <- as.character(merged$cluster_ft)
+
+```
+
+
+```{r}
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast")
+cell.type.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/type.rds")
+cell.state.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/state.rds")
+sc.data <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/sc_dat_allcelltypes.rds")
+sc.dat <- sc.dat[,colSums(sc.dat>0)>3]
+pseudo.count=0.1
+cell.state.labels <- as.character(cell.state.labels)
+cell.type.labels <- cell.state.labels
+n.cores=1
+cell.count.cutoff=50
+
+	ct.to.cst <- unique(cbind(cell.type=cell.type.labels, cell.state=cell.state.labels))
+	cst.count.table <- table(cell.state.labels)
+	low.count.cst <- names(cst.count.table)[cst.count.table < cell.count.cutoff]
+
+	#normalize ref.dat to prepare input for findMarker	
+	lib.size <- rowSums(sc.dat)
+	lib.size <- lib.size / median(lib.size)
+	dat.tmp <- sc.dat/lib.size
+	dat.tmp <- log2(dat.tmp + pseudo.count) - log2(pseudo.count)
+
+	#pairwise t test
+	fit.up <- pairwiseTTests(x= t(dat.tmp), 
+					   groups= cell.state.labels, 
+					   direction="up",
+					   BPPARAM = MulticoreParam(n.cores))
+	
+		
+	#filter out comparisons for cell states from the same cell type
+	pairs.celltype.first <- ct.to.cst[match(fit.up$pairs$first, ct.to.cst[,"cell.state"]),"cell.type"]
+	pairs.celltype.second <- ct.to.cst[match(fit.up$pairs$second, ct.to.cst[,"cell.state"]),"cell.type"]
+	
+	filter.idx <- pairs.celltype.first != pairs.celltype.second & ! fit.up$pairs$second %in% low.count.cst
+	
+	fit.up[[1]] <- fit.up[[1]][filter.idx]
+	fit.up[[2]] <- fit.up[[2]][filter.idx,]
+	
+	#get the maxmimum pvalue
+	output.up <- combineMarkers(fit.up$statistics, fit.up$pairs, pval.type="all", min.prop=NULL, 
+        log.p.in=F, log.p.out=F, full.stats=F, pval.field="p.value", 
+        effect.field="logFC", sorted=F)
+								     
+	all.ct <- unique(ct.to.cst[,"cell.type"])
+
+	#loop over each cell type, and then get statistics over its associated subtypes
+	ct.i <- all.ct
+	ct.stat.list <- lapply(all.ct,function(ct.i){
+		
+		#subset on the subtypes associated with celltype i (ct.i)
+		cst.i <- ct.to.cst[ct.to.cst[,"cell.type"]==ct.i,"cell.state"]
+		output.up.i <- output.up[cst.i]
+		
+		#take the minimum pvalue over all cst.i
+		pval.up.i <- do.call(cbind,lapply(output.up.i, '[', "p.value"))
+		pval.up.min.i <- apply(pval.up.i,1,min)
+		
+		#take the max lfc over the min lfc of cst.i over cst.j in other ct.j (same as the pvalue=min over "all" type)
+		lfc.i <- apply(do.call(cbind,lapply(output.up.i, function(output.up.i.j) {
+			apply(output.up.i.j[,grepl("logFC",colnames(output.up.i.j)),drop=F],1,min)
+		} )),1,max)
+		
+		data.frame(pval.up.min = pval.up.min.i, 
+				   min.lfc = lfc.i)	
+	})		
+
+	names(ct.stat.list) <- all.ct
+
+saveRDS(ct.stat.list, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/diff.exp.stat.rds")
+
+```
+
+```{r}
+b <- get.fraction (bp=bp_res_SelectedMarkers,
+            which.theta="final",
+            state.or.type="type")
+```
+
+```{r}
+Metadata <- TCGA_Masterfile[,c("Patient_ID", "Gender")]
+Metadata <- cbind(Metadata, b)
+```
+
+
+
+```{r}
+library(tidyr)
+Metadata$Pericyte <- Metadata$Pericyte + Metadata$pericyte  # Sum values
+Metadata$pericyte <- NULL
+Metadata$EDY <- TCGA_Masterfile_EDY_LoY_PQLoss$EDY
+data_long <- pivot_longer(Metadata, cols = -c(Patient_ID, Gender, EDY), names_to = "Cell_Type", values_to = "Proportion")
+```
+
+```{r}
+library(ggplot2)
+ggplot(data_long, aes(x = Cell_Type, y = Proportion, fill = Gender)) + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Cell Type", y = "Proportion")
+```
+
+```{r}
+ggplot(data_long, aes(x = Gender, y = Proportion, fill = Cell_Type)) +
+  geom_col(position="fill") +
+  #scale_y_continuous(labels = scales::percent) + # Convert y-axis to percentage
+  theme_minimal() +
+  labs(y = "Percentage", x = "Gender", fill = "Cell Type") +
+  scale_fill_brewer(palette = "Paired") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r}
+library(ggplot2)
+
+# Assuming your long-format data frame is named data_long
+ggplot(data_long, aes(x = Cell_Type, y = Proportion, fill = Gender)) +
+  
+  geom_violin(aes(fill = Gender), position = position_dodge(0.8), alpha = 0.5) + # Create violins
+  geom_jitter(aes(color = Gender), position = position_jitterdodge(jitter.width = 0.25, dodge.width = 0.8), size = 1.5, alpha = 0.8) +
+  scale_fill_manual(values = c("Male" = "mediumturquoise", "Female" = "indianred2")) + # Manually set fill colors for violins
+  scale_color_manual(values = c("Male" = "mediumturquoise", "Female" = "indianred2")) + # Manually set colors for jitter points
+  labs(y = "Proportion (%)", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Gender") +
+  #facet_wrap(~Gender, scales = "free_y") + # Separate plots for each gender, adjust scales as needed
+  labs(y = "Proportion", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Gender") +
+  #scale_fill_brewer(palette = "Pastel1") + # Optional: Adjust color palette
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+library(ggplot2)
+
+# Assuming your long-format data frame is named data_long
+ggplot(data_long, aes(x = Cell_Type, y = Proportion, fill = EDY)) +
+  geom_violin(aes(fill = EDY), position = position_dodge(0.8), alpha = 0.5) + # Create violins
+  geom_jitter(aes(color = EDY), position = position_jitterdodge(jitter.width = 0.25, dodge.width = 0.8), size = 1.5, alpha = 0.8) +
+  scale_fill_manual(values = c("Yes" = "mediumturquoise", "No" = "khaki1", "female" = "indianred2")) + # Manually set fill colors for violins
+  scale_color_manual(values = c("Yes" = "mediumturquoise", "No" = "khaki1", "female" = "indianred2")) + # Manually set colors for jitter points
+  labs(y = "Proportion (%)", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Gender") +
+  #facet_wrap(~Gender, scales = "free_y") + # Separate plots for each gender, adjust scales as needed
+  labs(y = "Proportion", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Gender") +
+  #scale_fill_brewer(palette = "Pastel1") + # Optional: Adjust color palette
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+library(ggplot2)
+
+# Assuming your long-format data frame is named data_long
+ggplot(data_long, aes(x = Cell_Type, y = Proportion, fill = Gender)) +
+  geom_violin(position = position_dodge(0.8), alpha = 0.5) + # Create violins with slight transparency
+  geom_point(position = position_dodge(0.8), aes(color = Gender), size = 1.5, alpha = 0.8) + # Add colored points
+  scale_fill_manual(values = c("Male" = "lightblue", "Female" = "pink")) + # Manually set fill colors for violins
+  scale_color_manual(values = c("Male" = "lightblue", "Female" = "pink")) + # Manually set colors for points
+  labs(y = "Proportion", x = "Cell Type", title = "Cell Type Proportions by Gender") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "right") +
+  guides(fill = guide_legend(title = "Gender"), color = guide_legend(title = "Gender"))
+
+```
+
+```{r}
+ggplot(data_long, aes(x = Cell_Type, y = Patient_ID, fill = Proportion)) +
+  geom_tile() + 
+  scale_fill_gradient(low = "blue", high = "red") +
+  theme_minimal() +
+  labs(x = "Cell Type", y = "Patient ID", fill = "Proportion") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r}
+# Assuming 'data_matrix' is your data matrix with cell type proportions
+library(pheatmap)
+
+# Generate the heatmap
+pheatmap(h,
+         #color = colorRampPalette(c("blue", "white", "red"))(n = 299), # Custom color gradient
+         #scale = "row"
+         #, # Scale the rows to have zero mean and unit variance
+         #clustering_distance_rows = "euclidean",
+         #clustering_distance_cols = "euclidean",
+         #clustering_method = "complete",
+         #show_rownames = TRUE,
+         #show_colnames = TRUE,
+         annotation_col = annotation_col # Add gender as column annotation
+)
+```
+```{r}
+# Define a color mapping for genders
+annotation_col <- data.frame(Sex = Metadata$EDY)
+gender_colors <- list(Sex = c("Yes" = "mediumturquoise", "No" = "khaki1", "female" = "indianred2"))
+
+# Create the heatmap
+Heatmap(h, 
+        name = "Proportion", 
+        top_annotation = HeatmapAnnotation(df = annotation_col, col = gender_colors),
+        cluster_rows = FALSE, 
+        cluster_columns = TRUE,
+        show_row_names = T, 
+        show_column_names = F, 
+        column_title = "Cell Type Proportions by Gender",
+        row_title = "Patients",
+        col = colorRamp2(c(0, 0.5, 1), c("blue", "white", "red"))) # Adjust color scale as needed
+
+```
+
+## Deconvoluting TCGA bulk data using all cell type labels 
+
+```{r}
+library(BayesPrism)
+library(Seurat)
+library(readxl)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast")
+
+TCGA_Masterfile <- read_excel("TCGA_MASTERFILE_clinical_data.xls")
+TCGA_Masterfile$Patient_ID <- gsub("-", ".", TCGA_Masterfile$Patient_ID)
+row.names(TCGA_Masterfile) <- TCGA_Masterfile$Patient_ID
+
+TPM_sym <- read.table("TCGA_TPM_symbol.txt")
+
+merged <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/scRNA-seq/merged_object_allcelltypes.rds")
+merged <- subset(merged, subset = cluster_ft != "NA")
+merged <- subset(merged, subset = Cells_Tumor != "NA")
+Idents(merged) <- merged$Cells_Tumor
+
+bk.dat <- as.matrix(t(TPM_sym))
+
+sc.dat <- as.matrix(merged@assays$RNA@counts)
+sc.dat <- t(sc.dat)
+
+saveRDS(sc.dat, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/sc_dat_allcelltypes.rds")
+
+cell.type.labels <- as.character(merged$Cells_Tumor)
+
+cell.state.labels <- as.character(merged$cluster_ft)
+
+sc.stat <- plot.scRNA.outlier(
+  input=sc.dat, #make sure the colnames are gene symbol or ENSMEBL ID 
+  cell.type.labels=cell.type.labels,
+  species="hs", #currently only human(hs) and mouse(mm) annotations are supported
+  return.raw=TRUE #return the data used for plotting. 
+  #pdf.prefix="gbm.sc.stat" specify pdf.prefix if need to output to pdf
+)
+
+bk.stat <- plot.bulk.outlier(
+  bulk.input=bk.dat,#make sure the colnames are gene symbol or ENSMEBL ID 
+    sc.input=sc.dat, #make sure the colnames are gene symbol or ENSMEBL ID 
+  cell.type.labels=cell.type.labels,
+  species="hs", #currently only human(hs) and mouse(mm) annotations are supported
+  return.raw=TRUE
+  #pdf.prefix="gbm.bk.stat" specify pdf.prefix if need to output to pdf
+)
+
+sc.dat.filtered <- cleanup.genes (input=sc.dat,
+                                  input.type="count.matrix",
+                                    species="hs", 
+                                    gene.group=c( "Rb","Mrp","other_Rb","chrM","MALAT1","chrX","chrY") ,
+                                    exp.cells=5)
+
+sc.dat.filtered.pc <-  select.gene.type (sc.dat.filtered,
+                                        gene.type = "protein_coding")
+
+saveRDS(sc.dat.filtered.pc, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/sc_dat_filtered_pc_allcelltypes.rds")
+
+diff.exp.stat <- ct.stat.list
+
+diff.exp.stat <- get.exp.stat(sc.dat=sc.dat[,colSums(sc.dat>0)>3],# filter genes to reduce memory use
+                                          cell.type.labels=cell.type.labels,
+                                          cell.state.labels=cell.state.labels,
+                                          pseudo.count=0.1, #a numeric value used for log2 transformation. =0.1 for 10x data, =10 for smart-seq. Default=0.1.
+                                          cell.count.cutoff=50, # a numeric value to exclude cell state with number of cells fewer than this value for t test. Default=50.
+                                          n.cores=1 #number of threads
+                                          )
+
+sc.dat.filtered.pc.sig <- select.marker (sc.dat=sc.dat.filtered.pc,
+                                                  stat=diff.exp.stat,
+                                                  pval.max=0.01,
+                                                  lfc.min=0.1)
+                                                  
+myPrism <- new.prism(
+  reference=sc.dat.filtered.pc.sig, 
+  mixture=bk.dat,
+  input.type="count.matrix", 
+  cell.type.labels = cell.type.labels, 
+  cell.state.labels = cell.state.labels,
+  key=NULL,
+  outlier.cut=0.01,
+    outlier.fraction=0.1,
+)
+
+bp_res <- run.prism(prism = myPrism, n.cores=50)
+
+saveRDS(bp.res, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/bp_res_allcelltypes.rds")
+```
+
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q highmem
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=500GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(scran)
+library(BiocParallel)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast")
+cell.type.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/type.rds")
+cell.state.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/state.rds")
+sc.dat <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/sc_dat_allcelltypes.rds")
+sc.dat <- sc.dat[,colSums(sc.dat>0)>3]
+pseudo.count=0.1
+cell.state.labels <- as.character(cell.state.labels)
+cell.type.labels <- cell.state.labels
+n.cores=1
+cell.count.cutoff=50
+
+	ct.to.cst <- unique(cbind(cell.type=cell.type.labels, cell.state=cell.state.labels))
+	cst.count.table <- table(cell.state.labels)
+	low.count.cst <- names(cst.count.table)[cst.count.table < cell.count.cutoff]
+
+	#normalize ref.dat to prepare input for findMarker	
+	lib.size <- rowSums(sc.dat)
+	lib.size <- lib.size / median(lib.size)
+	dat.tmp <- sc.dat/lib.size
+	dat.tmp <- log2(dat.tmp + pseudo.count) - log2(pseudo.count)
+
+	#pairwise t test
+	fit.up <- pairwiseTTests(x= t(dat.tmp), 
+					   groups= cell.state.labels, 
+					   direction="up",
+					   BPPARAM = MulticoreParam(n.cores))
+	
+		
+	#filter out comparisons for cell states from the same cell type
+	pairs.celltype.first <- ct.to.cst[match(fit.up$pairs$first, ct.to.cst[,"cell.state"]),"cell.type"]
+	pairs.celltype.second <- ct.to.cst[match(fit.up$pairs$second, ct.to.cst[,"cell.state"]),"cell.type"]
+	
+	filter.idx <- pairs.celltype.first != pairs.celltype.second & ! fit.up$pairs$second %in% low.count.cst
+	
+	fit.up[[1]] <- fit.up[[1]][filter.idx]
+	fit.up[[2]] <- fit.up[[2]][filter.idx,]
+	
+	#get the maxmimum pvalue
+	output.up <- combineMarkers(fit.up$statistics, fit.up$pairs, pval.type="all", min.prop=NULL, 
+        log.p.in=F, log.p.out=F, full.stats=F, pval.field="p.value", 
+        effect.field="logFC", sorted=F)
+								     
+	all.ct <- unique(ct.to.cst[,"cell.type"])
+
+	#loop over each cell type, and then get statistics over its associated subtypes
+	ct.i <- all.ct
+	ct.stat.list <- lapply(all.ct,function(ct.i){
+		
+		#subset on the subtypes associated with celltype i (ct.i)
+		cst.i <- ct.to.cst[ct.to.cst[,"cell.type"]==ct.i,"cell.state"]
+		output.up.i <- output.up[cst.i]
+		
+		#take the minimum pvalue over all cst.i
+		pval.up.i <- do.call(cbind,lapply(output.up.i, '[', "p.value"))
+		pval.up.min.i <- apply(pval.up.i,1,min)
+		
+		#take the max lfc over the min lfc of cst.i over cst.j in other ct.j (same as the pvalue=min over "all" type)
+		lfc.i <- apply(do.call(cbind,lapply(output.up.i, function(output.up.i.j) {
+			apply(output.up.i.j[,grepl("logFC",colnames(output.up.i.j)),drop=F],1,min)
+		} )),1,max)
+		
+		data.frame(pval.up.min = pval.up.min.i, 
+				   min.lfc = lfc.i)	
+	})		
+
+	names(ct.stat.list) <- all.ct
+
+saveRDS(ct.stat.list, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/diff.exp.stat.rds")
+
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q medium
+#BSUB -W 1:00 
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(BayesPrism)
+library(Seurat)
+library(readxl)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast")
+
+sc.dat.filtered.pc <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/sc_dat_filtered_pc_allcelltypes.rds")
+diff.exp.stat <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/diff_exp_stat_allcelltypes.rds")
+
+sc.dat.filtered.pc.sig <- select.marker (sc.dat=sc.dat.filtered.pc,
+                                                  stat=diff.exp.stat,
+                                                  pval.max=0.01,
+                                                  lfc.min=0.1)
+
+saveRDS(sc.dat.filtered.pc.sig, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/sc_dat_filtered_pc_sig_allcelltypes.rds")
+
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q medium
+#BSUB -W 1:00 
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(BayesPrism)
+library(Seurat)
+library(readxl)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast")
+
+sc.dat.filtered.pc <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/sc_dat_filtered_pc_allcelltypes.rds")
+diff.exp.stat <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/diff_exp_stat_allcelltypes.rds")
+
+sc.dat.filtered.pc.sig <- select.marker (sc.dat=sc.dat.filtered.pc,
+                                                  stat=diff.exp.stat,
+                                                  pval.max=0.01,
+                                                  lfc.min=0.1)
+
+saveRDS(sc.dat.filtered.pc.sig, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/sc_dat_filtered_pc_sig_allcelltypes.rds")
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q medium
+#BSUB -W 1:00 
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(BayesPrism)
+library(Seurat)
+library(readxl)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast")
+
+sc.dat.filtered.pc.sig <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/sc_dat_filtered_pc_sig_allcelltypes.rds")
+
+TPM_sym <- read.table("TCGA_TPM_symbol.txt")
+bk.dat <- as.matrix(t(TPM_sym))
+
+cell.type.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/type.rds")
+cell.state.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/state.rds")
+
+myPrism <- new.prism(
+  reference=sc.dat.filtered.pc.sig, 
+  mixture=bk.dat,
+  input.type="count.matrix", 
+  cell.type.labels = cell.type.labels, 
+  cell.state.labels = cell.state.labels,
+  key="Tumor",
+  outlier.cut=0.01,
+    outlier.fraction=0.1,
+)
+
+saveRDS(myPrism, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/myPrism_allcelltypes.rds")
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q medium
+#BSUB -W 1:00 
+#BSUB -n 50 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(BayesPrism)
+library(Seurat)
+library(readxl)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast")
+
+myPrism <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/myPrism_allcelltypes.rds")
+
+bp_res <- run.prism(prism = myPrism, n.cores=50)
+
+saveRDS(bp_res, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/bp_res_allcelltypes.rds")
+```
+
+```{r}
+b <- get.fraction (bp=bp_res_allcelltypes,
+            which.theta="final",
+            state.or.type="type")
+```
+
+```{r}
+Metadata <- TCGA_Masterfile[,c("Patient_ID", "Gender")]
+Metadata <- cbind(Metadata, b)
+```
+
+```{r}
+library(tidyr)
+#Metadata$Pericyte <- Metadata$Pericyte + Metadata$pericyte  # Sum values
+#Metadata$pericyte <- NULL
+Metadata$EDY <- TCGA_Masterfile_EDY_LoY_PQLoss$EDY
+data_long <- pivot_longer(Metadata, cols = -c(Patient_ID, Gender, EDY), names_to = "Cell_Type", values_to = "Proportion")
+```
+
+```{r}
+library(ggplot2)
+
+# Assuming your long-format data frame is named data_long
+ggplot(data_long, aes(x = Cell_Type, y = Proportion, fill = Gender)) +
+  
+  geom_boxplot(aes(fill = Gender), position = position_dodge(0.8), alpha = 0.5) + # Create violins
+  #geom_jitter(aes(color = Gender), position = position_jitterdodge(jitter.width = 0.25, dodge.width = 0.8), size = 1.5, alpha = 0.8) +
+  scale_fill_manual(values = c("Male" = "mediumturquoise", "Female" = "indianred2")) + # Manually set fill colors for violins
+  scale_color_manual(values = c("Male" = "mediumturquoise", "Female" = "indianred2")) + # Manually set colors for jitter points
+  labs(y = "Proportion (%)", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Sex") +
+  #facet_wrap(~Gender, scales = "free_y") + # Separate plots for each gender, adjust scales as needed
+  labs(y = "Proportion", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Gender") +
+  #scale_fill_brewer(palette = "Pastel1") + # Optional: Adjust color palette
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(broom)
+
+results <- data_long %>%
+  group_by(Cell_Type) %>%
+  do(tidy(t.test(Proportion ~ Gender, data = .)))
+
+results$adj_p_value <- p.adjust(results$p.value, method = "BH")
+results <- data.frame("Cell Type" = results$Cell_Type, adj_p_value = results$adj_p_value)
+print(results)
+```
+
+```{r}
+library(ggplot2)
+
+# Assuming your long-format data frame is named data_long
+ggplot(data_long, aes(x = Cell_Type, y = Proportion, fill = EDY)) +
+  
+  geom_boxplot(aes(fill =EDY), position = position_dodge(0.8), alpha = 0.5) + # Create violins
+  #geom_jitter(aes(color = Gender), position = position_jitterdodge(jitter.width = 0.25, dodge.width = 0.8), size = 1.5, alpha = 0.8) +
+  scale_fill_manual(values = c("Yes" = "mediumturquoise", "No" = "khaki1", "female" = "indianred2")) + # Manually set fill colors for violins
+  #scale_color_manual(values = c("Male" = "mediumturquoise", "Female" = "indianred2")) + # Manually set colors for jitter points
+  labs(y = "Proportion (%)", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Sex Chromosome Dosage") +
+  #facet_wrap(~Gender, scales = "free_y") + # Separate plots for each gender, adjust scales as needed
+  labs(y = "Proportion", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Sex Chromosome Dosage") +
+  #scale_fill_brewer(palette = "Pastel1") + # Optional: Adjust color palette
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+data_long$EDY <- as.factor(data_long$EDY)
+```
+
+```{r}
+# Initialize a list to store Kruskal-Wallis test results
+kw_results <- list()
+
+# Initialize a list to store pairwise comparison results, if necessary
+pairwise_results <- list()
+
+# Loop through each unique cell type
+for(cell_type in unique(data_long$Cell_Type)) {
+  # Subset data for the current cell type
+  subset_data <- filter(data_long, Cell_Type == cell_type)
+  
+  # Perform Kruskal-Wallis test
+  kw_test <- kruskal.test(Proportion ~ EDY, data = subset_data)
+  kw_results[[cell_type]] <- kw_test
+  
+  # If significant, perform pairwise comparisons
+  if(kw_test$p.value < 0.05) {
+    pairwise <- pairwise.wilcox.test(subset_data$Proportion, subset_data$EDY,
+                                     p.adjust.method = "BH")
+    pairwise_results[[cell_type]] <- pairwise
+  }
+}
+
+# Print the Kruskal-Wallis test results
+print(kw_results)
+
+# Print the pairwise comparison results, if any
+print(pairwise_results)
+```
+```{r}
+# Initialize an empty data frame to store summary results
+summary_results <- data.frame(Cell_Type = character(),
+                              KW_p_value = numeric(),
+                              Pairwise_significant_pairs = character(),
+                              stringsAsFactors = FALSE)
+
+# Loop through each unique cell type
+for(cell_type in unique(data_long$Cell_Type)) {
+  # Subset data for the current cell type
+  subset_data <- filter(data_long, Cell_Type == cell_type)
+  
+  # Perform Kruskal-Wallis test
+  kw_test <- kruskal.test(Proportion ~ EDY, data = subset_data)
+  
+  # Initialize variable to store pairwise results, if any
+  pairwise_info <- NA
+  
+  # If significant, perform pairwise comparisons
+  if(kw_test$p.value < 0.05) {
+    pairwise <- pairwise.wilcox.test(subset_data$Proportion, subset_data$EDY,
+                                     p.adjust.method = "BH")
+    # Extract significant pairs
+    significant_pairs <- which(pairwise$p.value < 0.05, arr.ind = TRUE)
+    if(length(significant_pairs) > 0) {
+      pairwise_info <- paste(names(pairwise$p.value)[significant_pairs], collapse = "; ")
+    }
+  }
+  
+  # Append results to the summary data frame
+  summary_results <- rbind(summary_results, data.frame(Cell_Type = cell_type,
+                                                       KW_p_value = kw_test$p.value,
+                                                       Pairwise_significant_pairs = pairwise_info,
+                                                       stringsAsFactors = FALSE))
+}
+
+# Print the summary table
+print(summary_results)
+
+summary_results[5,3] <- c("XX/XY")
+summary_results[8,3] <- c("XX/XY")
+summary_results[10,3] <- c("XX/XY-XX/X0")
+```
+
+
+```{r}
+kw_test <- kruskal.test(Proportion ~ EDY, data = data_long)
+kw_test
+```
+```{r}
+pairwise_results <- pairwise.wilcox.test(data_long$Proportion, data_long$EDY,
+                                           p.adjust.method = "BH")
+pairwise_results
+  
+```
+
+
+```{r}
+library(ggplot2)
+ggplot(data_long, aes(x = Cell_Type, y = Proportion, fill = Gender)) + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Cell Type", y = "Proportion")
+```
+
+```{r}
+ggplot(data_long, aes(x = Gender, y = Proportion, fill = Cell_Type)) +
+  geom_col(position="fill") +
+  #scale_y_continuous(labels = scales::percent) + # Convert y-axis to percentage
+  theme_minimal() +
+  labs(y = "Percentage", x = "Gender", fill = "Cell Type") +
+  scale_fill_brewer(palette = "Paired") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r}
+library(ggplot2)
+
+# Assuming your long-format data frame is named data_long
+ggplot(data_long, aes(x = Cell_Type, y = Proportion, fill = Gender)) +
+  
+  geom_violin(aes(fill = Gender), position = position_dodge(0.8), alpha = 0.5) + # Create violins
+  geom_jitter(aes(color = Gender), position = position_jitterdodge(jitter.width = 0.25, dodge.width = 0.8), size = 1.5, alpha = 0.8) +
+  scale_fill_manual(values = c("Male" = "mediumturquoise", "Female" = "indianred2")) + # Manually set fill colors for violins
+  scale_color_manual(values = c("Male" = "mediumturquoise", "Female" = "indianred2")) + # Manually set colors for jitter points
+  labs(y = "Proportion (%)", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Gender") +
+  #facet_wrap(~Gender, scales = "free_y") + # Separate plots for each gender, adjust scales as needed
+  labs(y = "Proportion", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Gender") +
+  #scale_fill_brewer(palette = "Pastel1") + # Optional: Adjust color palette
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+library(ggplot2)
+
+# Assuming your long-format data frame is named data_long
+ggplot(data_long, aes(x = Cell_Type, y = Proportion, fill = EDY)) +
+  geom_violin(aes(fill = EDY), position = position_dodge(0.8), alpha = 0.5) + # Create violins
+  geom_jitter(aes(color = EDY), position = position_jitterdodge(jitter.width = 0.25, dodge.width = 0.8), size = 1.5, alpha = 0.8) +
+  scale_fill_manual(values = c("Yes" = "mediumturquoise", "No" = "khaki1", "female" = "indianred2")) + # Manually set fill colors for violins
+  scale_color_manual(values = c("Yes" = "mediumturquoise", "No" = "khaki1", "female" = "indianred2")) + # Manually set colors for jitter points
+  labs(y = "Proportion (%)", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Gender") +
+  #facet_wrap(~Gender, scales = "free_y") + # Separate plots for each gender, adjust scales as needed
+  labs(y = "Proportion", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Gender") +
+  #scale_fill_brewer(palette = "Pastel1") + # Optional: Adjust color palette
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Deconvoluting TCGA bulk data using all cell types + fibroblast subclassification
+
+```{r}
+library(dplyr)
+merged_object_allcelltypes@meta.data <- merged_object_allcelltypes@meta.data %>%
+  mutate(Cells_Fibroblast = ifelse(Cells_Tumor == cluster_ft, Cells_Tumor, cluster_ft))
+merged_object_allcelltypes <- subset(merged_object_allcelltypes, subset = cluster_ft != "NA")
+merged_object_allcelltypes <- subset(merged_object_allcelltypes, subset = Cells_Tumor != "NA")
+saveRDS(merged_object_allcelltypes, "merged_ACT_fibroblast.rds")
+```
+
+```{r}
+cell.type.labels <- as.character(merged_object_allcelltypes$Cells_Fibroblast)
+saveRDS(cell.type.labels, "type_fibroblast.rds")
+
+cell.state.labels <- as.character(merged_object_allcelltypes$Cells_Fibroblast)
+saveRDS(cell.state.labels, "state_fibroblast.rds")
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q highmem
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=500GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(BayesPrism)
+library(Seurat)
+library(readxl)
+
+merged <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/sc_objects/merged_ACT_fibroblast.rds")
+cell.type.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/type_fibroblast.rds")
+cell.state.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/state_fibroblast.rds")
+
+TCGA_Masterfile <- read_excel("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/TCGA_MASTERFILE_clinical_data.xls")
+TCGA_Masterfile$Patient_ID <- gsub("-", ".", TCGA_Masterfile$Patient_ID)
+row.names(TCGA_Masterfile) <- TCGA_Masterfile$Patient_ID
+
+TPM_sym <- read.table("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/TCGA_TPM_symbol.txt")
+
+bk.dat <- as.matrix(t(TPM_sym))
+
+sc.dat <- as.matrix(merged@assays$RNA@counts)
+sc.dat <- t(sc.dat)
+
+saveRDS(sc.dat, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_ACT_Fibroblast/sc_dat_ACT_fibroblast.rds")
+
+sc.stat <- plot.scRNA.outlier(
+  input=sc.dat, #make sure the colnames are gene symbol or ENSMEBL ID 
+  cell.type.labels=cell.type.labels,
+  species="hs", #currently only human(hs) and mouse(mm) annotations are supported
+  return.raw=TRUE #return the data used for plotting. 
+  #pdf.prefix="gbm.sc.stat" specify pdf.prefix if need to output to pdf
+)
+
+bk.stat <- plot.bulk.outlier(
+  bulk.input=bk.dat,#make sure the colnames are gene symbol or ENSMEBL ID 
+  sc.input=sc.dat, #make sure the colnames are gene symbol or ENSMEBL ID 
+  cell.type.labels=cell.type.labels,
+  species="hs", #currently only human(hs) and mouse(mm) annotations are supported
+  return.raw=TRUE
+  #pdf.prefix="gbm.bk.stat" specify pdf.prefix if need to output to pdf
+)
+
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q highmem
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=500GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(BayesPrism)
+library(Seurat)
+library(readxl)
+
+sc.dat <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_ACT_Fibroblast/sc_dat_ACT_fibroblast.rds")
+
+sc.dat.filtered <- cleanup.genes (input=sc.dat,
+                                  input.type="count.matrix",
+                                  species="hs", 
+                                  gene.group=c( "Rb","Mrp","other_Rb","chrM","MALAT1","chrX","chrY") ,
+                                  exp.cells=5)
+
+sc.dat.filtered.pc <-  select.gene.type (sc.dat.filtered,
+                                         gene.type = "protein_coding")
+
+saveRDS(sc.dat.filtered.pc, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_ACT_Fibroblast/sc_dat_filtered_pc_ACT_fibroblast.rds")
+```
+
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q highmem
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=500GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(scran)
+library(BiocParallel)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast")
+cell.type.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/type_fibroblast.rds")
+cell.state.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/state_fibroblast.rds")
+sc.dat <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_ACT_Fibroblast/sc_dat_ACT_fibroblast.rds")
+sc.dat <- sc.dat[,colSums(sc.dat>0)>3]
+pseudo.count=0.1
+cell.state.labels <- as.character(cell.state.labels)
+cell.type.labels <- cell.state.labels
+n.cores=1
+cell.count.cutoff=50
+
+ct.to.cst <- unique(cbind(cell.type=cell.type.labels, cell.state=cell.state.labels))
+cst.count.table <- table(cell.state.labels)
+low.count.cst <- names(cst.count.table)[cst.count.table < cell.count.cutoff]
+
+#normalize ref.dat to prepare input for findMarker	
+lib.size <- rowSums(sc.dat)
+lib.size <- lib.size / median(lib.size)
+dat.tmp <- sc.dat/lib.size
+dat.tmp <- log2(dat.tmp + pseudo.count) - log2(pseudo.count)
+
+#pairwise t test
+fit.up <- pairwiseTTests(x= t(dat.tmp), 
+                         groups= cell.state.labels, 
+                         direction="up",
+                         BPPARAM = MulticoreParam(n.cores))
+
+
+#filter out comparisons for cell states from the same cell type
+pairs.celltype.first <- ct.to.cst[match(fit.up$pairs$first, ct.to.cst[,"cell.state"]),"cell.type"]
+pairs.celltype.second <- ct.to.cst[match(fit.up$pairs$second, ct.to.cst[,"cell.state"]),"cell.type"]
+
+filter.idx <- pairs.celltype.first != pairs.celltype.second & ! fit.up$pairs$second %in% low.count.cst
+
+fit.up[[1]] <- fit.up[[1]][filter.idx]
+fit.up[[2]] <- fit.up[[2]][filter.idx,]
+
+#get the maxmimum pvalue
+output.up <- combineMarkers(fit.up$statistics, fit.up$pairs, pval.type="all", min.prop=NULL, 
+                            log.p.in=F, log.p.out=F, full.stats=F, pval.field="p.value", 
+                            effect.field="logFC", sorted=F)
+
+all.ct <- unique(ct.to.cst[,"cell.type"])
+
+#loop over each cell type, and then get statistics over its associated subtypes
+ct.i <- all.ct
+ct.stat.list <- lapply(all.ct,function(ct.i){
+  
+  #subset on the subtypes associated with celltype i (ct.i)
+  cst.i <- ct.to.cst[ct.to.cst[,"cell.type"]==ct.i,"cell.state"]
+  output.up.i <- output.up[cst.i]
+  
+  #take the minimum pvalue over all cst.i
+  pval.up.i <- do.call(cbind,lapply(output.up.i, '[', "p.value"))
+  pval.up.min.i <- apply(pval.up.i,1,min)
+  
+  #take the max lfc over the min lfc of cst.i over cst.j in other ct.j (same as the pvalue=min over "all" type)
+  lfc.i <- apply(do.call(cbind,lapply(output.up.i, function(output.up.i.j) {
+    apply(output.up.i.j[,grepl("logFC",colnames(output.up.i.j)),drop=F],1,min)
+  } )),1,max)
+  
+  data.frame(pval.up.min = pval.up.min.i, 
+             min.lfc = lfc.i)	
+})		
+
+names(ct.stat.list) <- all.ct
+
+saveRDS(ct.stat.list, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_ACT_Fibroblast/diff.exp.stat.rds")
+
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q medium
+#BSUB -W 1:00 
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(BayesPrism)
+library(Seurat)
+library(readxl)
+
+sc.dat.filtered.pc <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_ACT_Fibroblast/sc_dat_filtered_pc_ACT_fibroblast.rds")
+diff.exp.stat <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_ACT_Fibroblast/diff.exp.stat.rds")
+
+sc.dat.filtered.pc.sig <- select.marker (sc.dat=sc.dat.filtered.pc,
+                                         stat=diff.exp.stat,
+                                         pval.max=0.01,
+                                         lfc.min=0.1)
+
+saveRDS(sc.dat.filtered.pc.sig, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_ACT_Fibroblast/sc_dat_filtered_pc_sig_ACT_fibroblast.rds")
+
+```
+
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q medium
+#BSUB -W 1:00 
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(BayesPrism)
+library(Seurat)
+library(readxl)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast")
+
+sc.dat.filtered.pc.sig <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_ACT_Fibroblast/sc_dat_filtered_pc_sig_ACT_fibroblast.rds")
+
+TPM_sym <- read.table("TCGA_TPM_symbol.txt")
+bk.dat <- as.matrix(t(TPM_sym))
+
+cell.type.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/type_fibroblast.rds")
+cell.state.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/state_fibroblast.rds")
+
+myPrism <- new.prism(
+  reference=sc.dat.filtered.pc.sig, 
+  mixture=bk.dat,
+  input.type="count.matrix", 
+  cell.type.labels = cell.type.labels, 
+  cell.state.labels = cell.state.labels,
+  key="Tumor",
+  outlier.cut=0.01,
+  outlier.fraction=0.1,
+)
+
+saveRDS(myPrism, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_ACT_Fibroblast/myPrism_ACT_fibroblast.rds")
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q medium
+#BSUB -W 1:00 
+#BSUB -n 50 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(BayesPrism)
+library(Seurat)
+library(readxl)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast")
+
+myPrism <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_ACT_Fibroblast/myPrism_ACT_fibroblast.rds")
+
+bp_res <- run.prism(prism = myPrism, n.cores=50)
+
+saveRDS(bp_res, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/bp_res_ACT_fibroblast.rds")
+```
+
+
+```{r}
+library(tidyr)
+b <- get.fraction (bp=bp_res_ACT_fibroblast,
+            which.theta="final",
+            state.or.type="type")
+Metadata <- TCGA_Masterfile[,c("Patient_ID", "Gender")]
+Metadata <- cbind(Metadata, b)
+#Metadata$Pericyte <- Metadata$Pericyte + Metadata$pericyte  # Sum values
+#Metadata$pericyte <- NULL
+Metadata$EDY <- TCGA_Masterfile_EDY_LoY_PQLoss$EDY
+data_long <- pivot_longer(Metadata, cols = -c(Patient_ID, Gender, EDY), names_to = "Cell_Type", values_to = "Proportion")
+```
+
+```{r}
+library(ggplot2)
+
+# Assuming your long-format data frame is named data_long
+ggplot(data_long, aes(x = Cell_Type, y = Proportion, fill = EDY)) +
+  
+  geom_boxplot(aes(fill =EDY), position = position_dodge(0.8), alpha = 0.5) + # Create violins
+  #geom_jitter(aes(color = Gender), position = position_jitterdodge(jitter.width = 0.25, dodge.width = 0.8), size = 1.5, alpha = 0.8) +
+  scale_fill_manual(values = c("Yes" = "mediumturquoise", "No" = "khaki1", "female" = "indianred2")) + # Manually set fill colors for violins
+  #scale_color_manual(values = c("Male" = "mediumturquoise", "Female" = "indianred2")) + # Manually set colors for jitter points
+  labs(y = "Proportion (%)", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Sex Chromosome Dosage") +
+  #facet_wrap(~Gender, scales = "free_y") + # Separate plots for each gender, adjust scales as needed
+  labs(y = "Proportion", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Sex Chromosome Dosage") +
+  #scale_fill_brewer(palette = "Pastel1") + # Optional: Adjust color palette
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Deconvoluting TCGA bulk data using all cell types + fibroblast subclassification only in ATLAS
+
+```{r}
+atlas_fibroblast_groups <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_fibroblast.rds")
+```
+
+
+```{r}
+atlas_fibroblast_groups$Cells_Fibroblast[is.na(atlas_fibroblast_groups$Cells_Fibroblast)] <- c("Unknown")
+```
+
+
+```{r}
+cell.type.labels <- as.character(atlas_fibroblast_groups$Cells_Fibroblast)
+saveRDS(cell.type.labels, "type_fibroblast.rds")
+
+cell.state.labels <- as.character(atlas_fibroblast_groups$Cells_Fibroblast)
+saveRDS(cell.state.labels, "state_fibroblast.rds")
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q highmem
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=500GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(BayesPrism)
+library(Seurat)
+library(readxl)
+
+merged <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/HNSC_fibroblast.rds")
+merged$Cells_Fibroblast[is.na(merged$Cells_Fibroblast)] <- c("Unknown")
+cell.type.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/type_fibroblast.rds")
+cell.state.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/state_fibroblast.rds")
+
+TCGA_Masterfile <- read_excel("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/TCGA_MASTERFILE_clinical_data.xls")
+TCGA_Masterfile$Patient_ID <- gsub("-", ".", TCGA_Masterfile$Patient_ID)
+row.names(TCGA_Masterfile) <- TCGA_Masterfile$Patient_ID
+
+TPM_sym <- read.table("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/TCGA_TPM_symbol.txt")
+
+bk.dat <- as.matrix(t(TPM_sym))
+
+sc.dat <- as.matrix(merged@assays$RNA@counts)
+sc.dat <- t(sc.dat)
+
+saveRDS(sc.dat, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_HNSC_Fibroblast/sc_dat_HNSC_Fibroblast.rds")
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_HNSC_Fibroblast")
+sc.stat <- plot.scRNA.outlier(
+  input=sc.dat, #make sure the colnames are gene symbol or ENSMEBL ID 
+  cell.type.labels=cell.type.labels,
+  species="hs", #currently only human(hs) and mouse(mm) annotations are supported
+  return.raw=TRUE, #return the data used for plotting. 
+  pdf.prefix="gbm.sc.stat" #specify pdf.prefix if need to output to pdf
+)
+
+bk.stat <- plot.bulk.outlier(
+  bulk.input=bk.dat,#make sure the colnames are gene symbol or ENSMEBL ID 
+  sc.input=sc.dat, #make sure the colnames are gene symbol or ENSMEBL ID 
+  cell.type.labels=cell.type.labels,
+  species="hs", #currently only human(hs) and mouse(mm) annotations are supported
+  return.raw=TRUE,
+  pdf.prefix="gbm.bk.stat" #specify pdf.prefix if need to output to pdf
+)
+
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q highmem
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=500GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(BayesPrism)
+library(Seurat)
+library(readxl)
+
+sc.dat <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_HNSC_Fibroblast/sc_dat_HNSC_Fibroblast.rds")
+
+sc.dat.filtered <- cleanup.genes (input=sc.dat,
+                                  input.type="count.matrix",
+                                  species="hs", 
+                                  gene.group=c( "Rb","Mrp","other_Rb","chrM","MALAT1","chrX","chrY") ,
+                                  exp.cells=5)
+
+sc.dat.filtered.pc <-  select.gene.type (sc.dat.filtered,
+                                         gene.type = "protein_coding")
+
+saveRDS(sc.dat.filtered.pc, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_HNSC_Fibroblast/sc_dat_filtered_pc_HNSC_Fibroblast.rds")
+```
+
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q highmem
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=500GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(scran)
+library(BiocParallel)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast")
+cell.type.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/type_fibroblast.rds")
+cell.state.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/state_fibroblast.rds")
+sc.dat <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_HNSC_Fibroblast/sc_dat_HNSC_Fibroblast.rds")
+sc.dat <- sc.dat[,colSums(sc.dat>0)>3]
+pseudo.count=0.1
+cell.state.labels <- as.character(cell.state.labels)
+cell.type.labels <- cell.state.labels
+n.cores=1
+cell.count.cutoff=50
+
+ct.to.cst <- unique(cbind(cell.type=cell.type.labels, cell.state=cell.state.labels))
+cst.count.table <- table(cell.state.labels)
+low.count.cst <- names(cst.count.table)[cst.count.table < cell.count.cutoff]
+
+#normalize ref.dat to prepare input for findMarker	
+lib.size <- rowSums(sc.dat)
+lib.size <- lib.size / median(lib.size)
+dat.tmp <- sc.dat/lib.size
+dat.tmp <- log2(dat.tmp + pseudo.count) - log2(pseudo.count)
+
+#pairwise t test
+fit.up <- pairwiseTTests(x= t(dat.tmp), 
+                         groups= cell.state.labels, 
+                         direction="up",
+                         BPPARAM = MulticoreParam(n.cores))
+
+
+#filter out comparisons for cell states from the same cell type
+pairs.celltype.first <- ct.to.cst[match(fit.up$pairs$first, ct.to.cst[,"cell.state"]),"cell.type"]
+pairs.celltype.second <- ct.to.cst[match(fit.up$pairs$second, ct.to.cst[,"cell.state"]),"cell.type"]
+
+filter.idx <- pairs.celltype.first != pairs.celltype.second & ! fit.up$pairs$second %in% low.count.cst
+
+fit.up[[1]] <- fit.up[[1]][filter.idx]
+fit.up[[2]] <- fit.up[[2]][filter.idx,]
+
+#get the maxmimum pvalue
+output.up <- combineMarkers(fit.up$statistics, fit.up$pairs, pval.type="all", min.prop=NULL, 
+                            log.p.in=F, log.p.out=F, full.stats=F, pval.field="p.value", 
+                            effect.field="logFC", sorted=F)
+
+all.ct <- unique(ct.to.cst[,"cell.type"])
+
+#loop over each cell type, and then get statistics over its associated subtypes
+ct.i <- all.ct
+ct.stat.list <- lapply(all.ct,function(ct.i){
+  
+  #subset on the subtypes associated with celltype i (ct.i)
+  cst.i <- ct.to.cst[ct.to.cst[,"cell.type"]==ct.i,"cell.state"]
+  output.up.i <- output.up[cst.i]
+  
+  #take the minimum pvalue over all cst.i
+  pval.up.i <- do.call(cbind,lapply(output.up.i, '[', "p.value"))
+  pval.up.min.i <- apply(pval.up.i,1,min)
+  
+  #take the max lfc over the min lfc of cst.i over cst.j in other ct.j (same as the pvalue=min over "all" type)
+  lfc.i <- apply(do.call(cbind,lapply(output.up.i, function(output.up.i.j) {
+    apply(output.up.i.j[,grepl("logFC",colnames(output.up.i.j)),drop=F],1,min)
+  } )),1,max)
+  
+  data.frame(pval.up.min = pval.up.min.i, 
+             min.lfc = lfc.i)	
+})		
+
+names(ct.stat.list) <- all.ct
+
+saveRDS(ct.stat.list, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_HNSC_Fibroblast/diff.exp.stat.rds")
+
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q medium
+#BSUB -W 1:00 
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(BayesPrism)
+library(Seurat)
+library(readxl)
+
+sc.dat.filtered.pc <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_HNSC_Fibroblast/sc_dat_filtered_pc_HNSC_Fibroblast.rds")
+diff.exp.stat <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_HNSC_Fibroblast/diff.exp.stat.rds")
+
+sc.dat.filtered.pc.sig <- select.marker (sc.dat=sc.dat.filtered.pc,
+                                         stat=diff.exp.stat,
+                                         pval.max=0.01,
+                                         lfc.min=0.1)
+
+saveRDS(sc.dat.filtered.pc.sig, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_HNSC_Fibroblast/sc_dat_filtered_pc_sig_HNSC_Fibroblast.rds")
+
+```
+
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q medium
+#BSUB -W 1:00 
+#BSUB -n 4 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(BayesPrism)
+library(Seurat)
+library(readxl)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast")
+
+sc.dat.filtered.pc.sig <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_HNSC_Fibroblast/sc_dat_filtered_pc_sig_HNSC_Fibroblast.rds")
+
+TPM_sym <- read.table("TCGA_TPM_symbol.txt")
+bk.dat <- as.matrix(t(TPM_sym))
+
+cell.type.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/type_fibroblast.rds")
+cell.state.labels <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/state_fibroblast.rds")
+
+myPrism <- new.prism(
+  reference=sc.dat.filtered.pc.sig, 
+  mixture=bk.dat,
+  input.type="count.matrix", 
+  cell.type.labels = cell.type.labels, 
+  cell.state.labels = cell.state.labels,
+  key="Tumor",
+  outlier.cut=0.01,
+  outlier.fraction=0.1,
+)
+
+saveRDS(myPrism, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_HNSC_Fibroblast/myPrism_HNSC_Fibroblast.rds")
+```
+
+```{r}
+#!/software/r/4.2.0/bin/Rscript
+#BSUB -q medium
+#BSUB -W 1:00 
+#BSUB -n 50 
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=200GB]"
+#BSUB -J Merge
+#BSUB -u cristina.condelopez@dkfz-heidelberg.de
+
+library(BayesPrism)
+library(Seurat)
+library(readxl)
+
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast")
+
+myPrism <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/Results_HNSC_Fibroblast/myPrism_HNSC_Fibroblast.rds")
+
+bp_res <- run.prism(prism = myPrism, n.cores=50)
+
+saveRDS(bp_res, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/bp_res_HNSC_Fibroblast.rds")
+```
+
+
+```{r}
+library(tidyr)
+b <- get.fraction (bp=bp_res_ACT_fibroblast,
+            which.theta="final",
+            state.or.type="type")
+Metadata <- TCGA_Masterfile[,c("Patient_ID", "Gender")]
+Metadata <- cbind(Metadata, b)
+#Metadata$Pericyte <- Metadata$Pericyte + Metadata$pericyte  # Sum values
+#Metadata$pericyte <- NULL
+Metadata$EDY <- TCGA_Masterfile_EDY_LoY_PQLoss$EDY
+data_long <- pivot_longer(Metadata, cols = -c(Patient_ID, Gender, EDY), names_to = "Cell_Type", values_to = "Proportion")
+```
+
+```{r}
+library(ggplot2)
+
+# Assuming your long-format data frame is named data_long
+ggplot(data_long, aes(x = Cell_Type, y = Proportion, fill = EDY)) +
+  
+  geom_boxplot(aes(fill =EDY), position = position_dodge(0.8), alpha = 0.5) + # Create violins
+  #geom_jitter(aes(color = Gender), position = position_jitterdodge(jitter.width = 0.25, dodge.width = 0.8), size = 1.5, alpha = 0.8) +
+  scale_fill_manual(values = c("Yes" = "mediumturquoise", "No" = "khaki1", "female" = "indianred2")) + # Manually set fill colors for violins
+  #scale_color_manual(values = c("Male" = "mediumturquoise", "Female" = "indianred2")) + # Manually set colors for jitter points
+  labs(y = "Proportion (%)", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Sex Chromosome Dosage") +
+  #facet_wrap(~Gender, scales = "free_y") + # Separate plots for each gender, adjust scales as needed
+  labs(y = "Proportion", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Sex Chromosome Dosage") +
+  #scale_fill_brewer(palette = "Pastel1") + # Optional: Adjust color palette
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(broom)
+summary_results <- data.frame(Cell_Type = character(),
+                              KW_p_value = numeric(),
+                              Pairwise_significant_pairs = character(),
+                              stringsAsFactors = FALSE)
+
+# Loop through each unique cell type
+for(cell_type in unique(data_long$Cell_Type)) {
+  # Subset data for the current cell type
+  subset_data <- filter(data_long, Cell_Type == cell_type)
+  
+  # Perform Kruskal-Wallis test
+  kw_test <- kruskal.test(Proportion ~ EDY, data = subset_data)
+  
+  # Initialize variable to store pairwise results, if any
+  pairwise_info <- NA
+  
+  # If significant, perform pairwise comparisons
+  if(kw_test$p.value < 0.05) {
+    pairwise <- pairwise.wilcox.test(subset_data$Proportion, subset_data$EDY,
+                                     p.adjust.method = "BH")
+    # Extract significant pairs
+    significant_pairs <- which(pairwise$p.value < 0.05, arr.ind = TRUE)
+    if(length(significant_pairs) > 0) {
+      pairwise_info <- paste(names(pairwise$p.value)[significant_pairs], collapse = "; ")
+    }
+  }
+  
+  # Append results to the summary data frame
+  summary_results <- rbind(summary_results, data.frame(Cell_Type = cell_type,
+                                                       KW_p_value = kw_test$p.value,
+                                                       Pairwise_significant_pairs = pairwise_info,
+                                                       stringsAsFactors = FALSE))
+}
+
+# Print the summary table
+print(summary_results)
+```
+
+```{r}
+female <- TCGA_Masterfile_EDY_LoY_PQLoss[TCGA_Masterfile_EDY_LoY_PQLoss$Gender == "Female",]
+max(female$GSVA_score)
+female$Chr_Dosage <- c("XX")
+```
+
+```{r}
+male <- TCGA_Masterfile_EDY_LoY_PQLoss[TCGA_Masterfile_EDY_LoY_PQLoss$Gender == "Male",]
+    p33 <- quantile(male$GSVA_score, probs = seq(0.33, 0.66))
+    p66 <- quantile(male$GSVA_score, probs = seq(0.66, 0.99))
+p33
+p66
+```
+
+```{r}
+X0 <- male[male$GSVA_score < -0.1183917, ]
+X0$Chr_Dosage <- c("X0")
+XY <- male[male$GSVA_score > 0.6072901 , ]
+XY$Chr_Dosage <- c("XY")
+```
+
+```{r}
+final_selection <- rbind(X0,XY)
+final_selection <- rbind(final_selection, female)
+```
+
+```{r}
+bp_res_HNSC_Fibroblast <- readRDS("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/bp_res_HNSC_Fibroblast.rds")
+
+library(tidyr)
+b <- get.fraction (bp=bp_res_HNSC_Fibroblast,
+            which.theta="final",
+            state.or.type="type")
+
+i <- which(rownames(b) %in% final_selection$Patient_ID)
+b <- b[i,]
+
+Metadata <- final_selection[,c("Patient_ID", "Chr_Dosage")]
+Metadata <- cbind(Metadata, b)
+Metadata$Pericyte <- Metadata$Pericyte + Metadata$pericyte  # Sum values
+Metadata$pericyte <- NULL
+data_long <- pivot_longer(Metadata, cols = -c(Patient_ID, Chr_Dosage), names_to = "Cell_Type", values_to = "Proportion")
+```
+
+```{r}
+library(ggplot2)
+
+# Assuming your long-format data frame is named data_long
+ggplot(data_long, aes(x = Cell_Type, y = Proportion, fill = Chr_Dosage)) +
+  
+  geom_boxplot(aes(fill =Chr_Dosage), position = position_dodge(0.8), alpha = 0.5) + # Create violins
+  #geom_jitter(aes(color = Gender), position = position_jitterdodge(jitter.width = 0.25, dodge.width = 0.8), size = 1.5, alpha = 0.8) +
+  scale_fill_manual(values = c("X0" = "mediumturquoise", "XY" = "khaki1", "XX" = "indianred2")) + # Manually set fill colors for violins
+  #scale_color_manual(values = c("Male" = "mediumturquoise", "Female" = "indianred2")) + # Manually set colors for jitter points
+  labs(y = "Proportion (%)", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Sex Chromosome Dosage") +
+  #facet_wrap(~Gender, scales = "free_y") + # Separate plots for each gender, adjust scales as needed
+  labs(y = "Proportion", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Sex Chromosome Dosage") +
+  #scale_fill_brewer(palette = "Pastel1") + # Optional: Adjust color palette
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+   
+
+```{r}
+# Subset data where cell types end with "CAF" or are exactly "Pericyte"
+fibroblast <- subset(data_long, grepl("CAF$", Cell_Type) | Cell_Type == "Pericyte")
+```
+
+```{r}
+library(ggplot2)
+
+# Assuming your long-format data frame is named data_long
+ggplot(fibroblast, aes(x = Cell_Type, y = Proportion, fill = Chr_Dosage)) +
+  
+  geom_boxplot(aes(fill =Chr_Dosage), position = position_dodge(0.8), alpha = 0.5) + # Create violins
+  #geom_jitter(aes(color = Gender), position = position_jitterdodge(jitter.width = 0.25, dodge.width = 0.8), size = 1.5, alpha = 0.8) +
+  scale_fill_manual(values = c("X0" = "mediumturquoise", "XY" = "khaki1", "XX" = "indianred2")) + # Manually set fill colors for violins
+  #scale_color_manual(values = c("Male" = "mediumturquoise", "Female" = "indianred2")) + # Manually set colors for jitter points
+  labs(y = "Proportion (%)", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Sex Chromosome Dosage") +
+  #facet_wrap(~Gender, scales = "free_y") + # Separate plots for each gender, adjust scales as needed
+  labs(y = "Proportion", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Sex Chromosome Dosage") +
+  #scale_fill_brewer(palette = "Pastel1") + # Optional: Adjust color palette
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+```{r}
+iCAF<- subset(data_long, Cell_Type == "iCAF")
+```
+
+```{r}
+library(ggplot2)
+
+# Assuming your long-format data frame is named data_long
+ggplot(iCAF, aes(x = Cell_Type, y = Proportion, fill = Chr_Dosage)) +
+  
+  geom_boxplot(aes(fill =Chr_Dosage), position = position_dodge(0.8), alpha = 0.5) + # Create violins
+  #geom_jitter(aes(color = Gender), position = position_jitterdodge(jitter.width = 0.25, dodge.width = 0.8), size = 1.5, alpha = 0.8) +
+  scale_fill_manual(values = c("X0" = "mediumturquoise", "XY" = "khaki1", "XX" = "indianred2")) + # Manually set fill colors for violins
+  #scale_color_manual(values = c("Male" = "mediumturquoise", "Female" = "indianred2")) + # Manually set colors for jitter points
+  labs(y = "Proportion (%)", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Sex Chromosome Dosage") +
+  #facet_wrap(~Gender, scales = "free_y") + # Separate plots for each gender, adjust scales as needed
+  labs(y = "Proportion", x = "Cell Type", title = "Violin Plot of Cell Type Proportions by Sex Chromosome Dosage") +
+  #scale_fill_brewer(palette = "Pastel1") + # Optional: Adjust color palette
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+```{r}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(broom)
+summary_results <- data.frame(Cell_Type = character(),
+                              KW_p_value = numeric(),
+                              Pairwise_significant_pairs = character(),
+                              stringsAsFactors = FALSE)
+
+# Loop through each unique cell type
+for(cell_type in unique(data_long$Cell_Type)) {
+  # Subset data for the current cell type
+  subset_data <- filter(data_long, Cell_Type == cell_type)
+  
+  # Perform Kruskal-Wallis test
+  kw_test <- kruskal.test(Proportion ~ Chr_Dosage, data = subset_data)
+  
+  # Initialize variable to store pairwise results, if any
+  pairwise_info <- NA
+  
+  # If significant, perform pairwise comparisons
+  if(kw_test$p.value < 0.05) {
+    pairwise <- pairwise.wilcox.test(subset_data$Proportion, subset_data$Chr_Dosage,
+                                     p.adjust.method = "BH")
+    # Extract significant pairs
+    significant_pairs <- which(pairwise$p.value < 0.05, arr.ind = TRUE)
+    if(length(significant_pairs) > 0) {
+      pairwise_info <- paste(names(pairwise$p.value)[significant_pairs], collapse = "; ")
+    }
+  }
+  
+  # Append results to the summary data frame
+  summary_results <- rbind(summary_results, data.frame(Cell_Type = cell_type,
+                                                       KW_p_value = kw_test$p.value,
+                                                       Pairwise_significant_pairs = pairwise_info,
+                                                       stringsAsFactors = FALSE))
+}
+
+# Print the summary table
+print(summary_results)
+```
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(tidyr
+
+# Compute mean proportions per Cell_Type and Chr_Dosage
+mean_proportions <- data_long %>%
+  group_by(Cell_Type, Chr_Dosage) %>%
+  summarise(Mean_Proportion = mean(Proportion, na.rm = TRUE), .groups = 'drop') %>%
+  pivot_wider(names_from = Chr_Dosage, values_from = Mean_Proportion, values_fill = 0)
+
+# Print the resulting table
+print(mean_proportions)
+
+write.csv(mean_proportions, "/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Fibroblast/bp_ACT_mean_proportions.csv", row.names = FALSE)
+```
+

@@ -1,0 +1,45 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-07-05"
+---
+
+```{r setup, include=FALSE}
+library(GEOquery)
+gse=getGEO(filename="./GSE117973_series_matrix.txt.gz")
+```
+
+```{r}
+exprs <- na.omit(as.data.frame(assayData(gse)$exprs))
+ids <- rownames(exprs)
+```
+
+```{r}
+library(illuminaHumanv4.db)
+x <- illuminaHumanv4GENENAME(rownames(exprs))
+x <- as.data.frame(ls(illuminaHumanv4GENENAME))
+```
+
+```{r}
+syms <- as.data.frame(na.omit(unlist(mget(ids, illuminaHumanv4ENSEMBL))))
+colnames(syms) <- c("ENSMBL")
+```
+
+
+```{r}
+i <- which(  rownames(syms) %in% rownames(exprs))
+syms1 <- syms[i,]
+
+i <- which(rownames(exprs) %in% rownames(syms))
+exprs1 <- exprs[i,]
+
+exprs1$ENSMBL <- syms1
+```
+
+```{r}
+library("org.Hs.eg.db") # remember to install it if you don't have it already
+symbols <- mapIds(org.Hs.eg.db, keys = exprs1$ENSMBL, keytype = "ENSEMBL", column="SYMBOL")
+exprs1$SYMBOL <- symbols
+rownames(exprs1) <- exprs1$SYMBOL
+```
+

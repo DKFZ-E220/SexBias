@@ -1,0 +1,445 @@
+---
+title: "CNV Analysis TCGA-HNSC"
+subtitle: "Obtatining Copy Number Index"
+author: "Cristina Conde López"
+date: "`r Sys.Date()`"
+output: 
+ prettydoc::html_pretty:
+    toc: true
+    theme: hpstr
+    highlight: github
+    number_sections: true
+ pdf_document:
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+bibliography: citations.bibtex
+nocite: '@*'
+---
+
+# Obtain the Data with TCGABiolinks
+
+## CNV data
+
+This data was downloaded on the 31st of January 2022 from the GDC portal using R tool TCGABiolinks.
+
+Loading of package TCGAbiolink (download raw data)
+
+```{r, results= FALSE, message=FALSE, warning=FALSE}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("TCGAbiolinks")
+```
+
+```{r, results= FALSE, message=FALSE, warning=FALSE}
+library (TCGAbiolinks)
+```
+
+
+Specification of data search, we store the specifications in query 
+Possible specifications (look in the GDC portal): GDCquery(
+  project,
+  data.category,
+  data.type,
+  workflow.type,
+  legacy = FALSE,
+  access,
+  platform,
+  file.type,
+  barcode,
+  data.format,
+  experimental.strategy,
+  sample.type
+)
+
+In this case selecting head and neck cancer, transcriptome profiling data --> gene expression quatification, data type in counts.
+
+```{r, results= FALSE, message=FALSE}
+query <- GDCquery(project = 'TCGA-HNSC',
+data.category = "Copy Number Variation",
+data.type = "Copy Number Segment",
+platform = "Affymetrix SNP 6.0")
+```
+
+Obtaining sample names from the query file (column cases)
+
+```{r}
+samplesDown <- getResults (query, cols = c('cases'))
+```
+
+Selecting the samples that come from "Primary Solid Tumor" (typesample = "TP") among all the samples selected.
+
+```{r}
+dataSmTP <- TCGAquery_SampleTypes (barcode = samplesDown, typesample = 'TP')
+```
+
+
+Searching in the database for the selected TP samples:
+
+```{r, message=FALSE, results=FALSE}
+queryDown <- GDCquery(project = 'TCGA-HNSC',
+data.category = "Copy Number Variation",
+data.type = "Copy Number Segment",
+platform = "Affymetrix SNP 6.0",
+barcode = c(dataSmTP))
+```
+
+Once the search is defined then we obtain the data with GSCdownload, it downloads itself into a new directory in the working directory called GDC data, it can be changed in the function:
+
+```{r, message=FALSE}
+GDCdownload(queryDown)
+```
+
+GDCprepare converts the data downloaded into an R file
+
+```{r, message=FALSE}
+HNSC_SegmentFiles <- GDCprepare(queryDown, save = TRUE, save.filename =
+"TCGA_HNSC_SegmentFiles.rda")
+```
+
+## Patient Metadata
+
+This data was obtained on the 7th of October downloaded directly from the GDC portal: 
+
+```{r, warning=FALSE}
+library(readxl)
+TCGA_Masterfile <- read_excel("TCGA_MASTERFILE_clinical_data.xls")
+TCGA_Masterfile$Patient_ID <- gsub("-", ".", TCGA_Masterfile$Patient_ID)
+row.names(TCGA_Masterfile) <- TCGA_Masterfile$Patient_ID
+```
+
+```{r}
+male_ID <- TCGA_Masterfile[TCGA_Masterfile$Gender=="Male",]
+```
+
+## Biospecimen data: Percentage Tumor Nuclei
+
+This data was downloaded on the 2nd of February 2022 directly from the GDC portal, the same parameters for selecting relevant patients were used as in the data download above.
+
+We read the data:
+
+```{r}
+orgs <- read.delim("slide.tsv", header=TRUE)
+```
+
+We take the relevant information from the dataset, in this case Patient ID and percentage of tumor cell nuclei in the sample.
+
+```{r}
+data <- data.frame(ID = orgs$case_submitter_id, perc_nuc = orgs$percent_tumor_nuclei)
+```
+
+We transform the ID's into the same format as other datasets:
+
+```{r}
+data$ID <- gsub("-", ".", data$ID)
+```
+
+```{r}
+data <- data[data$ID  %in% male_ID$Patient_ID,]
+```
+
+```{r, warning=FALSE}
+data1 <- data[!is.na(as.numeric(data$perc_nuc)), ]
+```
+
+```{r}
+data2 <- aggregate(as.numeric(data1$perc_nuc),by=list(ID=data1$ID),data=data1,FUN=mean)
+```
+
+# Processing of the data:
+
+## Obtaining CNI
+
+Create Sizes for the segments: Chromosome End - Chromosome Star:
+
+```{r}
+HNSC_SegmentFiles$Size <- HNSC_SegmentFiles$End - HNSC_SegmentFiles$Start
+```
+
+Look for patients that have more than one sample and cleaning it up:
+
+```{r}
+patients <- split(HNSC_SegmentFiles, f = HNSC_SegmentFiles$Sample )
+```
+
+Giving patients the same ID as other datasets:
+
+```{r}
+name <- names(patients)
+```
+
+```{r}
+name <- substring(name, 1, 12)
+```
+
+```{r}
+name <- gsub("-", ".", name)
+```
+
+```{r}
+duplicated(name) 
+```
+
+Taking out duplicated data:
+
+```{r}
+HNSC_SegmentFiles <- HNSC_SegmentFiles[HNSC_SegmentFiles$Sample != "TCGA-CV-6955-01A-11D-2062-01",]
+```
+
+```{r}
+HNSC_SegmentFiles <- HNSC_SegmentFiles[HNSC_SegmentFiles$Sample != "TCGA-CV-6956-01A-21D-2062-01",]
+```
+
+Renaming the patients with an ID matching the metadata:
+
+```{r}
+HNSC_SegmentFiles$Sample <- substring(HNSC_SegmentFiles$Sample, 1, 12)
+HNSC_SegmentFiles$Sample <- gsub("-", ".", HNSC_SegmentFiles$Sample)
+```
+
+### In male patients
+
+Selecting the male patients:
+
+```{r}
+SegmentFiles_Male <- HNSC_SegmentFiles[HNSC_SegmentFiles$Sample %in% male_ID$Patient_ID,]
+```
+
+Unlogging the segment_mean variable to obtain Copy Number:
+
+```{r}
+SegmentFiles_Male$Unlog_Segment <- 2^(1+SegmentFiles_Male$Segment_Mean)
+```
+
+Weighting the segment_mean by the sizes of the segments:
+
+```{r}
+SegmentFiles_Male$Weighted_value <- SegmentFiles_Male$Unlog_Segment*SegmentFiles_Male$Size
+```
+
+Separating the patients in a list in order for the loop to work:
+
+```{r}
+patients_male <- split(SegmentFiles_Male, f = SegmentFiles_Male$Sample )
+```
+
+Loop that calculates the average Copy Number Index per Chromosome inside each patient:
+
+```{r}
+ID <- names(patients_male)
+a <- c(1:22, "X", "Y")
+x <- list()
+for (h in (1:length(patients_male))) {
+  vec <- c()
+  for (i in a) {
+    mean <- sum(patients_male[[h]]$Weighted_value[patients_male[[h]]$Chromosome %in% i])/sum(patients_male[[h]]$Size[patients_male[[h]]$Chromosome %in% i])
+    vec <- c(vec,mean)
+  }
+  names(vec) <- c(1:22, "X", "Y")
+  x[[paste0(ID[h])]] <- vec
+}
+
+```
+
+Unlisting the result to obtain a data frame with the CNI for each Chromosome for each patient:
+
+```{r}
+chrom_male <- do.call(rbind.data.frame, x)
+colnames(chrom_male) <- a
+rownames(chrom_male) <- ID
+```
+
+Plotting the CNI for all the Male patients:
+
+```{r}
+den <- density(chrom_male$Y)
+plot(den, xlim = c(0,2))
+```
+Obtaining the data in common patients for Percentage Tumor Nuclei and Chromosome Number Index:
+
+```{r}
+data3 <- data2[data2$ID %in% rownames(chrom_male),]
+```
+
+```{r}
+chrom_male1 <- chrom_male[data3$ID,]
+```
+
+Weighting Chromosome Number Index by Percentage tumor nuclei:
+
+```{r}
+chrom_male2 <- (chrom_male1 + (data3$x/100) - 1)/(data3$x/100)
+```
+
+Saving the data:
+
+```{r}
+write.table(chrom_male2, "Male_CopyNumberIndex.txt", sep = "\t", row.names = F, quote = F)
+```
+
+Plotting weighted Y chromosome for male patients:
+
+```{r}
+den <- density(chrom_male2$`Y`)
+plot(den, xlim = c(0,2), xlab = "ChrY Copy Number Index")
+```
+```{r}
+chrom_male2$`X` <- chrom_male2$`X`/2
+```
+
+```{r}
+# Open a PDF device to save the plot
+pdf("male_Ychrom_density_plot.pdf", width = 10, height = 6)  # Specify the file name and dimensions
+
+# Create the plot
+den <- density(chrom_male2$`Y`)
+plot(den, xlim = c(0,2), xlab = "ChrY Copy Number Index")
+
+# Close the PDF device to finalize the file
+dev.off()
+```
+
+```{r}
+# Open a PDF device to save the plot
+pdf("male_Xchrom_density_plot.pdf", width = 10, height = 6)  # Specify the file name and dimensions
+
+# Create the plot
+den <- density(chrom_male2$`X`)
+plot(den, xlim = c(0, 2), xlab = "ChrX Copy Number Index")
+
+# Close the PDF device to finalize the file
+dev.off()
+```
+
+From this graph we can extract that we have successfully replicated what was done in the analysis by Hollows et al. 
+
+Calculating the maximum points of the graph:
+
+```{r}
+which.max(den$y)
+den$x[110]
+```
+
+```{r}
+which.max(den$y[den$x < 0.75])
+den$x[72]
+```
+
+```{r}
+den <- density(chrom_male2$`X`)
+plot(den)
+```
+
+```{r}
+LoY <- chrom_male2[chrom_male2$Y < 0.4803115,]
+```
+
+```{r}
+i <- which(male_ID$Patient_ID %in% rownames(LoY))
+i
+```
+
+```{r}
+LoY <- c(1:length(male_ID$Patient_ID))
+LoY[i] <- c("Yes")
+LoY[-i] <- c("No")
+```
+
+```{r}
+male_ID$LoY <- LoY
+```
+
+
+### Doing the same process for the female patients:
+
+```{r}
+Female_ID <- TCGA_Masterfile[TCGA_Masterfile$Gender == "Female",]
+```
+
+```{r}
+SegmentFiles_Female <- HNSC_SegmentFiles[HNSC_SegmentFiles$Sample %in% Female_ID$Patient_ID,]
+```
+
+```{r}
+SegmentFiles_Female$Unlog_Segment <- 2^(1+SegmentFiles_Female$Segment_Mean)
+```
+
+```{r}
+SegmentFiles_Female$Weighted_value <- SegmentFiles_Female$Unlog_Segment*SegmentFiles_Female$Size
+```
+
+```{r}
+patients_Female <- split(SegmentFiles_Female, f = SegmentFiles_Female$Sample )
+```
+
+```{r}
+ID <- names(patients_Female)
+a <- c(1:22, "X", "Y")
+x <- list()
+for (h in (1:length(patients_Female))) {
+  vec <- c()
+  for (i in a) {
+    mean <- sum(patients_Female[[h]]$Weighted_value[patients_Female[[h]]$Chromosome %in% i])/sum(patients_Female[[h]]$Size[patients_Female[[h]]$Chromosome %in% i])
+    vec <- c(vec,mean)
+  }
+  names(vec) <- c(1:22, "X", "Y")
+  x[[paste0(ID[h])]] <- vec
+}
+
+```
+
+```{r}
+chrom_Female <- do.call(rbind.data.frame, x)
+```
+
+```{r}
+colnames(chrom_Female) <- a
+rownames(chrom_Female) <- ID
+```
+
+```{r}
+write.table(chrom_Female, "Female_CopyNumberIndex.txt", sep = "\t", row.names = T, quote = T)
+```
+
+```{r}
+den <- density(chrom_Female$Y)
+plot(den, xlim = c(0,2), xlab = "ChrY Copy Number Index")
+```
+```{r}
+which.max(den$y)
+den$x[193]
+```
+
+```{r}
+# Open a PDF device to save the plot
+pdf("female_Ychrom_density_plot.pdf", width = 10, height = 6)  # Specify the file name and dimensions
+
+# Create the plot
+den <- density(chrom_Female$Y)
+plot(den, xlim = c(0,2), xlab = "ChrY Copy Number Index")
+
+# Close the PDF device to finalize the file
+dev.off()
+```
+
+```{r}
+# Open a PDF device to save the plot
+pdf("female_Xchrom_density_plot.pdf", width = 10, height = 6)  # Specify the file name and dimensions
+
+# Create the plot
+den <- density(chrom_Female$X)
+plot(den, xlab = "ChrX Copy Number Index")
+
+# Close the PDF device to finalize the file
+dev.off()
+```
+
+```{r}
+den <- density(chrom_Female$X)
+plot(den)
+```
+
+# Bibliography
+

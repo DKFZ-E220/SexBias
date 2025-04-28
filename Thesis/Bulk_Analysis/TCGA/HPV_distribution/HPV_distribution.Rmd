@@ -1,0 +1,126 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-03-31"
+---
+
+```{r}
+data <- read.table("/omics/odcf/analysis/OE0509_projects/hnscc/Gender_Analysis/Male/DEG_Analysis/Gender_COX2/TCGA_Metadata_Male_Ychr.txt", 
+                   header = TRUE, 
+                   sep = "\t", 
+                   stringsAsFactors = FALSE)
+```
+
+```{r}
+data$HPV <- factor(data$HPV, levels = c("Negative", "Positive"))
+library(forcats)
+
+data$Y_expression <- fct_recode(data$Y_expression,
+                                "Low" = "Very_Low",
+                                "Intermediate" = "Low",
+                                "High" = "High")
+data$Y_expression <- factor(data$Y_expression, levels = c("Low", "Intermediate", "High"))
+```
+
+```{r}
+library(survival)
+library(survminer)
+surv_object0 <- Surv(time = data$OS_5y_months, event = data$OS_5y_event)
+fit00 <- survfit(surv_object0 ~ Y_expression, data = data)
+ggsurvplot(fit00, data = data, pval = TRUE, title = "OS 5 year event")
+ggsave("Survival_HPVall.pdf", width = 6, height = 4)
+```
+```{r}
+data <- factor(data$HPV, levels = c("Negative", "Positive"))
+```
+
+```{r}
+# Contingency table
+table_hpvy <- table(data$Y_expression, data$HPV)
+print(table_hpvy)
+```
+```{r}
+fisher.test(table_hpvy)
+test_result <- fisher.test(table_hpvy)
+test_result$p.value
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Prepare data for ggplot
+plot_data <- data %>%
+  group_by(Y_expression, HPV, .drop = FALSE) %>%  # Prevents dropping levels
+  summarise(count = n(), .groups = 'drop') %>%
+  group_by(Y_expression) %>%
+  mutate(prop = count / sum(count))
+
+plot_data <- na.omit(plot_data)
+
+# Plot proportions
+# Add p-value as annotation (example using Fisher's test)
+ggplot(plot_data, aes(x = Y_expression, y = prop, fill = HPV)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(x = "Y Chromosome Expression Group", 
+       y = "Proportion of Patients", 
+       fill = "HPV Status",
+       title = "Distribution of HPV Status Across Y Expression Groups") +
+  scale_fill_manual(values = c("Negative" = "coral2", 
+                               "Positive" = "steelblue1")) +
+  theme_minimal(base_size = 12) +
+  annotate("text", x = 2, y = 1.05, 
+           label = paste0("Fisher's p = ", signif(test_result$p.value, 3)), 
+           size = 4)+
+  theme(legend.position = "top")
+
+ggsave("HPV_Y_expression_distribution.pdf", 
+       width = 6, height = 5, dpi = 300)
+```
+
+```{r}
+TCGA_Masterfile <- read_csv("EDY/TCGA_Masterfile_EDY_LoY_PQLoss.csv")
+male <- subset(TCGA_Masterfile, subset = Gender == "Male")
+```
+
+```{r}
+# Subset by HPV status
+gsva_neg <- subset(male, subset = HPV == "Negative")
+gsva_neg <- gsva_neg$GSVA_score
+gsva_pos <- subset(male, subset = HPV == "Positive")
+gsva_pos <- gsva_pos$GSVA_score
+
+# Shapiro-Wilk test
+shapiro.test(gsva_neg)  # Test for HPV-negative
+shapiro.test(gsva_pos)  # Test for HPV-positive
+```
+
+```{r}
+t_test <- t.test(GSVA_score ~ HPV, data = male)
+```
+
+```{r}
+library(ggplot2)
+
+data <- data_frame(HPV = male$HPV, GSVA_score = male$GSVA_score)
+data <- na.omit(data)
+
+ggplot(data, aes(x = HPV, y = GSVA_score, fill = HPV)) +
+  geom_violin(trim = FALSE, alpha = 0.7, color = NA) +
+  geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.9) +
+  scale_fill_manual(values = c("Negative" = "coral2", 
+                               "Positive" = "steelblue1")) +
+  labs(x = "HPV Status", 
+       y = "Y Chromosome GSVA Score", 
+       fill = "HPV Status",
+       title = "Comparison of Y Chromosome Gene Expression Between HPV Groups") +
+  annotate("text", x = 1.5, 
+           y = max(data$GSVA_score, na.rm = TRUE) * 1.8, 
+           label = paste0("T-test p = ", signif(t_test$p.value, 3)),
+           size = 4) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "top")
+ggsave("GSVA_score_HPV_comparison.pdf", width = 5, height = 4)
+```
+

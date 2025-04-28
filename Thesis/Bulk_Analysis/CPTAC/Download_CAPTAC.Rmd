@@ -1,0 +1,177 @@
+---
+title: "Extracting data with TCGABiolinks"
+output: html_document
+---
+
+Loading of package TCGAbiolink (download raw data)
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("TCGAbiolinks")
+```
+
+
+
+
+Specification of data search, we store the specifications in query 
+Possible specifications (look in the GDC portal): GDCquery(
+  project,
+  data.category,
+  data.type,
+  workflow.type,
+  legacy = FALSE,
+  access,
+  platform,
+  file.type,
+  barcode,
+  data.format,
+  experimental.strategy,
+  sample.type
+)
+
+In this case selecting head and neck cancer, transcriptome profiling data --> gene expression quatification, data type in counts.
+
+```{r}
+query <- GDCquery(project = 'CPTAC-3',
+data.category = "Transcriptome Profiling",
+data.type = "Gene Expression Quantification",
+workflow.type = "HTSeq - Counts", sample.type = "Primary Tumor")
+```
+
+Obtaining sample names from the query file (column cases)
+
+```{r}
+samplesDown <- getResults (query, cols = c('cases'))
+```
+
+Selecting the samples that come from "Primary Solid Tumor" (typesample = "TP") among all the samples selected.
+
+```{r}
+dataSmTP <- TCGAquery_SampleTypes (barcode = samplesDown, typesample = 'Primary Tumor')
+```
+
+
+Searching in the database for the selected TP samples:
+
+```{r}
+queryDown <- GDCquery(project = 'CPTAC-3',
+data.category = "Transcriptome Profiling",
+data.type = "Gene Expression Quantification",
+workflow.type = "HTSeq - Counts",
+barcode = c(dataSmTP), sa)
+```
+
+Once the search is defined then we obtain the data with GSCdownload, it downloads itself into a new directory in the working directory called GDC data, it can be changed in the function:
+
+```{r}
+GDCdownload(query)
+```
+
+GDCprepare converts the data downloaded into an R file
+
+```{r}
+CPTAC_HTseqSE <- GDCprepare(query, save = TRUE, save.filename =
+"CPTAC_3_HTseq.rda")
+```
+
+Extracting the counts (under assay) using SummarizedExperiment from the HNSC_HTseqSE object
+
+```{r}
+Counts <- as.data.frame(SummarizedExperiment::assay(CPTAC_HTseqSE))
+```
+
+Writing the table into the working directory:
+
+```{r}
+write.table (Counts, file = 'HTseq2.tsv')
+```
+
+Renaming the columns so they have matching names
+
+```{r}
+colnames <- substr(colnames(Counts), 1, 12)
+colnames(Counts) <- colnames
+head(Counts)
+```
+
+Ordering the count table in the same alphanumeric way as the sample information table
+
+```{r}
+Counts <- Counts[ , order(names(Counts))]
+```
+
+Writing table in csv format into the working directory so its easier to get it in further uses
+
+```{r}
+## Here you insert the pathway and filename you desire :)
+
+write.csv(as.data.frame(Counts), 
+          file="/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC/CPTAC_3_counts.csv")
+```
+
+```{r}
+clinical <- GDCquery_clinic(project = "CPTAC-3", type = "clinical")
+```
+
+```{r}
+clinical_SSC <- clinical[clinical$primary_diagnosis == "Squamous cell carcinoma, NOS",]
+```
+
+```{r}
+i <- which(clinical_SSC$tissue_or_organ_of_origin != "Lower lobe, lung")
+clinical_SSC <- clinical_SSC[i,]
+i <- which(clinical_SSC$tissue_or_organ_of_origin != "Lung, NOS")
+clinical_SSC <- clinical_SSC[i,]
+i <- which(clinical_SSC$tissue_or_organ_of_origin != "Middle lobe, lung")
+clinical_SSC <- clinical_SSC[i,]
+i <- which(clinical_SSC$tissue_or_organ_of_origin != "Upper lobe, lung")
+clinical_SSC <- clinical_SSC[i,]
+```
+
+```{r}
+## Here you insert the pathway and filename you desire :)
+
+write.csv(as.data.frame(clinical_SSC), 
+          file="/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC_clinical_HNSSC.csv")
+```
+
+
+```{r}
+i <- which(clinical_SSC$gender == "male")
+clinical_SSC_male <- clinical_SSC[i,]
+```
+
+```{r}
+## Here you insert the pathway and filename you desire :)
+
+write.csv(as.data.frame(clinical_SSC_male), 
+          file="/Users/cristinacondel/Desktop/Gender_Analysis/Male/CPTAC_clinical_HNSSC_male.csv")
+```
+
+```{r}
+names <- substr(colnames(Counts), 1, 9)
+```
+
+```{r}
+colnames(Counts) <- names
+```
+
+```{r}
+i <- which(colnames(Counts) %in% clinical_SSC_male$submitter_id)
+```
+
+```{r}
+Counts_male <- Counts[,i]
+```
+
+```{r}
+table((colnames(Counts) %in% clinical_SSC$submitter_id))
+```
+
+
+
+
+
+

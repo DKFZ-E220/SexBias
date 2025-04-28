@@ -1,0 +1,265 @@
+---
+title: "Getting TPM counts from TCGA"
+author: "Cristina Conde Lopez"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    df_print: paged
+  prettydoc::html_pretty:
+    toc: yes
+    theme: hpstr
+    highlight: github
+    number_sections: yes
+editor_options:
+  chunk_output_type: inline
+---
+
+For this kind of job you need:
+
+- Table of counts from RNA seq analysis from the samples of interest.
+- GTF file to where the samples were mapped during the counting process.
+
+## Get count data
+
+```{r}
+TCGA_counts <- read.csv("HNSC_NT_Counts.csv", row.names = 1)
+```
+
+## Get TPM data
+
+First we need the GTF file, for this we use the one for GRCh38.p0 since is the one the TCGA counts are mapped to (ENSG). We download this GTF from the following pathway on the 13th of January 2022:
+
+https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_38/gencode.v38.annotation.gtf.gz
+
+```{r, message}
+library(GenomicFeatures)
+```
+
+We make a TxDb from GTF file:
+
+```{r}
+txdb <- makeTxDbFromGFF("gencode.v38.annotation.gtf")
+```
+
+We get the information for the genes in this file:
+
+```{r}
+all.genes <- genes(txdb)
+```
+
+We import the list of ENSEMBL ID of interest of our data, which corresponds to the rownames of the TCGA_counts file:
+
+```{r}
+my.genes <- rownames(TCGA_counts)
+```
+
+We calculate the exonic gene lenght for each gene contained in the the txdb file:
+
+```{r}
+exons.list.per.gene <- exonsBy(txdb,by="gene")
+exonic.gene.sizes <- as.data.frame(sum(width(reduce(exons.list.per.gene))))
+```
+
+We then select the gene lenghts for the genes of insterest, that is my.genes:    
+
+```{r}
+exonic.gene.sizes <- exonic.gene.sizes[my.genes,]
+```
+  
+And put the names back on the genes:
+
+```{r}
+names(exonic.gene.sizes) <- my.genes
+```
+
+Now we have the lenght for each gene in our table, this way we can compute the TPM data using the table of counts and the gene lenght:
+    
+```{r}
+# michael's version
+# [https://support.bioconductor.org/p/91218/](https://support.bioconductor.org/p/91218/)
+tpm3 <- function(counts,len) {
+ 
+  x <- counts/len
+  x <- na.omit(x)
+  
+  return(t(t(x)*1e6/colSums(x)))
+ 
+}
+```
+   
+```{r}
+TCGA_NT_TPM <- as.data.frame(tpm3(as.matrix(TCGA_counts), exonic.gene.sizes))
+```
+
+```{r}
+write.csv(TCGA_NT_TPM , "TCGA_NT_TPM_ENSMBL.csv")
+```
+
+Now we map all the ENSEMBL ID to the SYMBOL ID:
+
+```{r}
+library(org.Hs.eg.db)
+```
+
+```{r}
+org.Hs.eg_dbInfo()
+```
+
+```{r}
+names <- rownames(TCGA_NT_TPM)
+names <- gsub("\\..*","",names)
+```
+
+```{r}
+TCGA_NT_TPM$ensmbl.id <- names
+```
+
+
+```{r}
+TCGA_NT_TPM$symbol <- mapIds(org.Hs.eg.db,
+                     keys=TCGA_NT_TPM$ensmbl.id,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+
+```{r}
+require("biomaRt")
+mart <- useMart("ENSEMBL_MART_ENSEMBL")
+mart <- useDataset("hsapiens_gene_ensembl", mart)
+
+ens <- rownames(TCGA_NT_TPM)
+ensLookup <- gsub("\\.[0-9]*$", "", ens)
+ensLookup
+
+annotLookup <- getBM(
+  mart=mart,
+  attributes=c("ensembl_transcript_id", "ensembl_gene_id",
+    "gene_biotype", "external_gene_name"),
+  filter="ensembl_gene_id",
+  values=ensLookup,
+  uniqueRows=TRUE)
+
+annotLookup <- data.frame(
+  ens[match(annotLookup$ensembl_gene_id, ensLookup)],
+  annotLookup)
+
+colnames(annotLookup) <- c(
+  "original_id",
+  c("ensembl_transcript_id", "ensembl_gene_id",
+    "gene_biotype", "external_gene_name"))
+```
+
+```{r}
+TCGA_NT_symbol <- TCGA_NT_TPM[,-45]
+```
+
+
+```{r}
+TCGA_NT_symbol <- aggregate(x = TCGA_NT_symbol[ , colnames(TCGA_NT_symbol) != "symbol"],             # Mean by group
+          by = list(TCGA_NT_symbol$symbol),
+          FUN = max)
+
+```
+
+```{r}
+row.names(TCGA_NT_symbol) <- TCGA_NT_symbol$Group.1
+```
+
+
+```{r}
+TCGA_NT_symbol <- TCGA_NT_symbol[,c(-1)]
+```
+
+```{r}
+write.csv(TCGA_NT_symbol, "TCGA_NT_symbol.csv")
+```
+
+```{r}
+write.csv(TCGA_TPM_symbol, file = "TCGA_TPM.csv")
+```
+
+## Curate the dataset for protein-coding genes
+
+First we download the ensembl database using the BiomarRt package.
+
+```{r}
+library(biomaRt)
+```
+
+For this we use the useMart function selecting the homo sapiens dataset since we're working with human data.
+
+```{r}
+ensembl = useMart("ensembl",dataset="hsapiens_gene_ensembl")
+```
+
+We can check all the attributes in the database with the use of the listAttribute function.
+
+```{r}
+attributes = listAttributes(ensembl)
+```
+
+In this case since we have the Ensembl gene ID we are going to use that to match each gene to their transcript biotype, for this we use the getBM() function, in attrubutes we select the ones we want to obtain, in filters the type of information we're starting with and in values the dataset containing our information.
+
+```{r}
+transcriptbiotype <- getBM(attributes = c('ensembl_gene_id', 'transcript_biotype'), 
+              filters = 'ensembl_gene_id', 
+              values = rownames(TCGA_TPM), 
+              mart = ensembl)
+```
+
+Once we extract this information we sort the dataframe generated by the Ensembl ID so it has the same order as the TCGA_TPM data.
+
+```{r}
+transcriptbiotype <- transcriptbiotype[order(transcriptbiotype$ensembl_gene_id),]
+```
+
+We select only the Ensembl ID's that are protein_conding.
+
+```{r}
+transcriptbiotype_pc <- subset(transcriptbiotype, transcriptbiotype$transcript_biotype == "protein_coding")
+```
+
+We see which ID's are matching with the ones in the TCGA_TPM file and select them creating a new TPM file that only has protein coding genes.
+
+```{r}
+i <-  which(rownames(TCGA_TPM) %in% transcriptbiotype_pc$ensembl_gene_id)
+TCGA_TPM_pc <- TCGA_TPM[i,]
+```
+
+```{r}
+write.table(TCGA_TPM_pc, "/Users/cristinacondel/Desktop/MAPK-MEK_Analysis/Gene_signatures/TCGA_TPM_ENSMBL_proteincoding.txt", sep = "\t", row.names = T, quote = F)
+```
+
+Now we map all the ENSEMBL ID to the SYMBOL ID:
+
+```{r}
+library(org.Hs.eg.db)
+```
+
+
+```{r}
+TCGA_TPM_pc$symbol <- mapIds(org.Hs.eg.db,
+                     keys=rownames(TCGA_TPM_pc),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+TCGA_TPM_pc_symbol <- aggregate(. ~ symbol, data = TCGA_TPM_pc, max)
+```
+
+```{r}
+row.names(TCGA_TPM_pc_symbol) <- TCGA_TPM_pc_symbol$symbol
+```
+
+```{r}
+TCGA_TPM_pc_symbol <- TCGA_TPM_pc_symbol[,c(-1)]
+```
+
+```{r}
+write.table(TCGA_TPM_pc_symbol, "/Users/cristinacondel/Desktop/MAPK-MEK_Analysis/Gene_signatures/TCGA_TPM_SYMBOL_proteincoding.txt", sep = "\t", row.names = T , quote = F)
+```
+
+```{r}
+write.csv(TCGA_TPM_symbol, file = "TCGA_TPM.csv")
+```

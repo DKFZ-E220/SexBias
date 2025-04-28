@@ -1,0 +1,1332 @@
+---
+title: "pathways_celltype"
+output: html_document
+date: "2024-08-07"
+---
+
+```{r}
+library(CellChat)
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY_Fibroblast")
+
+files <- list.files(path = c("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY_Fibroblast"), pattern = "^HPVng_fibr_.*\\.rds$", full.names = TRUE) # Ensure it only lists .rds files
+
+# Initialize an empty list to store cellchat objects
+cellchats <- list()
+
+for (i in files) {
+  # Extract the base name without the extension for use as the list key
+  name <- gsub("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY/HPVng_fibr_", "", i)
+  name <- gsub(".rds", "", name)
+  
+  # Read the RDS file
+  cellchat <- readRDS(i)
+  cellchat<- subsetCellChat(cellchat, idents.use = c("CD8T","Tumor","CD4T","Macrophage","Multi","NK","Monocyte","panDC","Neutrophils","Mast","Bcell","mCAF","tpCAF","Endothelial","PlasmaCell","Epithelial","IDO_CAF","iCAF","apCAF","Pericyte","rCAF+apCAF","vCAF","rCAF","Fibroblast","pericyte","dCAF"))
+  
+  # Store the cellchat object in the list under the derived name
+  cellchats[[name]] <- cellchat
+}
+```
+
+```{r}
+for (i in (1:length(cellchats))){
+cellchats[[i]] <- netAnalysis_computeCentrality(cellchats[[i]], slot.name = "netP") # the slot 'netP' means the inferred intercellular communication
+}
+```
+
+```{r}
+names(cellchats) <- c("X0", "XX", "XY")
+```
+
+```{r}
+library(ComplexHeatmap)
+i = 1
+pathway.union <- union(cellchats[[i]]@netP$pathways, cellchats[[i+1]]@netP$pathways)
+pathway.union <- union(pathway.union, cellchats[[i+2]]@netP$pathways)
+
+ht1 = netAnalysis_signalingRole_heatmap(cellchats[[i]], pattern = "outgoing", signaling = pathway.union, title = names(cellchats)[i], width = 8, height = 10.5, font.size = 2)
+ht2 = netAnalysis_signalingRole_heatmap(cellchats[[i+1]], pattern = "outgoing", signaling = pathway.union, title = names(cellchats)[i+1], width = 8, height = 10.5, font.size = 2)
+ht3 = netAnalysis_signalingRole_heatmap(cellchats[[i+2]], pattern = "outgoing", signaling = pathway.union, title = names(cellchats)[i+2], width = 8, height = 10.5, font.size = 2)
+#pdf(file= paste0("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/pathways.pdf"), width = 12, height = 6)
+draw(ht1 + ht2 + ht3, ht_gap = unit(0.5, "cm"))
+dev.off()
+```
+
+```{r}
+i <- 1
+pathway.union <- union(cellchats[[i]]@netP$pathways, cellchats[[i+1]]@netP$pathways)
+pathway.union <- union(pathway.union, cellchats[[i+2]]@netP$pathways)
+```
+
+
+```{r}
+library(CellChat)
+i <- 3
+name <- names(cellchats[i])
+object <- cellchats[[i]] 
+signaling = pathway.union
+pattern = c("incoming") 
+slot.name = "netP"
+color.use = NULL 
+color.heatmap = "BuGn"
+title = NULL
+width = 10
+height = 8
+font.size = 8 
+font.size.title = 10
+cluster.rows = FALSE 
+cluster.cols = FALSE
+                                             
+  if (length(slot(object, slot.name)$centr) == 0) {
+    stop("Please run `netAnalysis_computeCentrality` to compute the network centrality scores! ")
+  }
+  centr <- slot(object, slot.name)$centr
+  outgoing <- matrix(0, nrow = nlevels(object@idents), ncol = length(centr))
+  incoming <- matrix(0, nrow = nlevels(object@idents), ncol = length(centr))
+  dimnames(outgoing) <- list(levels(object@idents), names(centr))
+  dimnames(incoming) <- dimnames(outgoing)
+  for (i in 1:length(centr)) {
+    outgoing[,i] <- centr[[i]]$outdeg
+    incoming[,i] <- centr[[i]]$indeg
+  }
+  if (pattern == "outgoing") {
+    mat <- t(outgoing)
+    legend.name <- "Outgoing"
+  } else if (pattern == "incoming") {
+    mat <- t(incoming)
+    legend.name <- "Incoming"
+  } else if (pattern == "all") {
+    mat <- t(outgoing+ incoming)
+    legend.name <- "Overall"
+  }
+  if (is.null(title)) {
+    title <- paste0(legend.name, " signaling patterns")
+  } else {
+    title <- paste0(paste0(legend.name, " signaling patterns"), " - ",title)
+  }
+
+  if (!is.null(signaling)) {
+    mat1 <- mat[rownames(mat) %in% signaling, , drop = FALSE]
+    mat <- matrix(0, nrow = length(signaling), ncol = ncol(mat))
+    idx <- match(rownames(mat1), signaling)
+    mat[idx[!is.na(idx)], ] <- mat1
+    dimnames(mat) <- list(signaling, colnames(mat1))
+  }
+  mat.ori <- mat
+  mat <- sweep(mat, 1L, apply(mat, 1, max), '/', check.margin = FALSE)
+  mat[mat == 0] <- NA
+  mat <- mat[!apply(mat, 1, function(row) all(is.nan(row))), ]
+
+
+  if (is.null(color.use)) {
+    color.use <- scPalette(length(colnames(mat)))
+  }
+  color.heatmap.use = grDevices::colorRampPalette((RColorBrewer::brewer.pal(n = 9, name = color.heatmap)))(100)
+
+  df<- data.frame(group = colnames(mat)); rownames(df) <- colnames(mat)
+  names(color.use) <- colnames(mat)
+
+  pSum <- rowSums(mat)
+  pSum.original <- pSum
+  pSum <- -1/log(pSum)
+  pSum[is.na(pSum)] <- 0
+  idx1 <- which(is.infinite(pSum) | pSum < 0)
+  if (length(idx1) > 0) {
+    values.assign <- seq(max(pSum)*1.1, max(pSum)*1.5, length.out = length(idx1))
+    position <- sort(pSum.original[idx1], index.return = TRUE)$ix
+    pSum[idx1] <- values.assign[match(1:length(idx1), position)]
+  }
+  if (min(mat, na.rm = T) == max(mat, na.rm = T)) {
+    legend.break <- max(mat, na.rm = T)
+  } else {
+    legend.break <- c(round(min(mat, na.rm = T), digits = 1), round(max(mat, na.rm = T), digits = 1))
+  }
+
+```
+
+```{r}
+# for i=1, X0
+X0 <- mat
+#for i=2
+XX <- mat
+#for i=3
+XY <- mat
+```
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(tibble)
+
+
+# Convert matrices to data frames and add a row identifier
+XX <- as.data.frame(XX) %>% tibble::rownames_to_column("row_id")
+X0 <- as.data.frame(X0) %>% tibble::rownames_to_column("row_id")
+XY <- as.data.frame(XY) %>% tibble::rownames_to_column("row_id")
+
+# Create a full set of unique row identifiers
+all_rows <- union(union(XX$row_id, X0$row_id), XY$row_id)
+
+# Ensure each data frame has all the rows, filling missing with NA
+XX_complete <- XX %>% complete(row_id = all_rows)
+X0_complete <- X0 %>% complete(row_id = all_rows)
+XY_complete <- XY %>% complete(row_id = all_rows)
+
+# Set row names back and remove the row_id column
+rownames(XX_complete) <- XX_complete$row_id
+rownames(X0_complete) <- X0_complete$row_id
+rownames(XY_complete) <- XY_complete$row_id
+
+# Remove the row_id column after setting rownames
+XX_complete <- XX_complete %>% select(-row_id)
+X0_complete <- X0_complete %>% select(-row_id)
+XY_complete <- XY_complete %>% select(-row_id)
+
+# Ensure unique column names before binding
+colnames(XX_complete) <- paste0("XX_", colnames(XX_complete))
+colnames(X0_complete) <- paste0("X0_", colnames(X0_complete))
+colnames(XY_complete) <- paste0("XY_", colnames(XY_complete))
+
+# Merge the data frames by row names
+merged_df <- bind_cols(XX_complete, X0_complete, XY_complete)
+rownames(merged_df) <- rownames(XX_complete)
+
+write.csv(merged_df, "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/pathway_incoming_scores_XX_XY_X0.csv")
+```
+
+```{r}
+library(readr)
+pathway_scores_XX_XY_X0 <- read_csv("Pathway_communication/pathway_outgoing_scores_XX_XY_X0.csv")
+merged_df <- pathway_scores_XX_XY_X0
+rownames(merged_df) <- merged_df$...1
+```
+
+```{r}
+iCAF_df <- merged_df %>%
+  select(contains("iCAF"))
+rownames(iCAF_df) <- rownames(merged_df)
+```
+```{r}
+# Assuming `iCAF_df` is your data frame with iCAF columns
+# Convert the data frame to a matrix
+iCAF_matrix <- as.matrix(iCAF_df)
+
+# Replace NAs with 0
+iCAF_matrix[is.na(iCAF_matrix)] <- 0
+
+# Identify and remove rows where all values are zero
+non_zero_rows <- apply(iCAF_matrix, 1, function(row) any(row != 0))
+iCAF_matrix_clean <- iCAF_matrix[non_zero_rows, ]
+
+#Set names of columns as desired
+colnames(iCAF_matrix_clean) <- c("XX", "X0", "XY")
+
+# Create a custom color palette from white to dark blue
+color_palette <- colorRampPalette(c("white", "darkblue"))(50)
+```
+
+```{r}
+# Load the necessary library
+library(pheatmap)
+
+# Create a heatmap with row clustering
+#pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/iCAF_heatmap_incoming_iCAF_tumor.pdf", width = 8, height = 6) 
+pheatmap(iCAF_matrix_clean, 
+         cluster_rows = TRUE,  # Enable row clustering
+         cluster_cols = FALSE, # Disable column clustering for clarity
+         scale = "none",       # Do not scale data since values are already 0-1
+         main = "iCAF-Tumor Heatmap Incoming", # Add a title to the heatmap
+         color = color_palette,
+         breaks = seq(0, 1, length.out = 51),  # Define color breaks from 0 to 1
+         border_color = NA,    # Remove borders between cells
+         fontsize_row = 3,    # Set font size for row labels
+         fontsize_col = 10,
+         angle_col = 0         # Set column labels to be horizontal
+         )
+#dev.off()
+```
+
+```{r}
+tumor_df <- merged_df %>%
+  select(contains("Tumor"))
+rownames(tumor_df) <- rownames(merged_df)
+```
+
+```{r}
+# Assuming `iCAF_df` is your data frame with iCAF columns
+# Convert the data frame to a matrix
+tumor_matrix <- as.matrix(tumor_df)
+
+# Replace NAs with 0
+tumor_matrix[is.na(tumor_matrix)] <- 0
+
+# Identify and remove rows where all values are zero
+non_zero_rows <- apply(tumor_matrix, 1, function(row) any(row != 0))
+tumor_matrix_clean <- tumor_matrix[non_zero_rows, ]
+
+#Set names of columns as desired
+colnames(tumor_matrix_clean) <- c("XX", "X0", "XY")
+
+# Create a custom color palette from white to dark blue
+color_palette <- colorRampPalette(c("white", "darkred"))(50)
+```
+
+```{r}
+# Load the necessary library
+library(pheatmap)
+
+# Create a heatmap with row clustering
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/tumor_heatmap_outgoing.pdf", width = 8, height = 6) 
+pheatmap(tumor_matrix_clean, 
+         cluster_rows = TRUE,  # Enable row clustering
+         cluster_cols = FALSE, # Disable column clustering for clarity
+         scale = "none",       # Do not scale data since values are already 0-1
+         main = "Tumor Heatmap Outgoing", # Add a title to the heatmap
+         color = color_palette,
+         breaks = seq(0, 1, length.out = 51),  # Define color breaks from 0 to 1
+         border_color = NA,    # Remove borders between cells
+         fontsize_row = 3,    # Set font size for row labels
+         fontsize_col = 10,
+         angle_col = 0         # Set column labels to be horizontal
+         )
+dev.off()
+```
+
+```{r}
+mCAF_df <- merged_df %>%
+  select(contains("mCAF"))
+rownames(mCAF_df) <- rownames(merged_df)
+```
+
+```{r}
+# Assuming `iCAF_df` is your data frame with iCAF columns
+# Convert the data frame to a matrix
+mCAF_matrix <- as.matrix(mCAF_df)
+
+# Replace NAs with 0
+mCAF_matrix[is.na(mCAF_matrix)] <- 0
+
+# Identify and remove rows where all values are zero
+non_zero_rows <- apply(mCAF_matrix, 1, function(row) any(row != 0))
+mCAF_matrix_clean <- mCAF_matrix[non_zero_rows, ]
+
+#Set names of columns as desired
+colnames(mCAF_matrix_clean) <- c("XX", "X0", "XY")
+
+# Create a custom color palette from white to dark blue
+color_palette <- colorRampPalette(c("white", "darkgreen"))(50)
+```
+
+```{r}
+# Load the necessary library
+library(pheatmap)
+
+# Create a heatmap with row clustering
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/tmCAF_heatmap_incoming.pdf", width = 8, height = 6) 
+pheatmap(mCAF_matrix_clean, 
+         cluster_rows = TRUE,  # Enable row clustering
+         cluster_cols = FALSE, # Disable column clustering for clarity
+         scale = "none",       # Do not scale data since values are already 0-1
+         main = "mCAF Heatmap Incoming", # Add a title to the heatmap
+         color = color_palette,
+         breaks = seq(0, 1, length.out = 51),  # Define color breaks from 0 to 1
+         border_color = NA,    # Remove borders between cells
+         fontsize_row = 3,    # Set font size for row labels
+         fontsize_col = 10,
+         angle_col = 0         # Set column labels to be horizontal
+         )
+dev.off()
+```
+
+```{r}
+library(CellChat)
+setwd("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY_Fibroblast")
+
+files <- list.files(path = c("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY_Fibroblast"), pattern = "^HPVng_fibr_.*\\.rds$", full.names = TRUE) # Ensure it only lists .rds files
+
+# Initialize an empty list to store cellchat objects
+cellchats <- list()
+
+for (i in files) {
+  # Extract the base name without the extension for use as the list key
+  name <- gsub("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Cell_Chat_XX_XY/HPVng_fibr_", "", i)
+  name <- gsub(".rds", "", name)
+  
+  # Read the RDS file
+  cellchat <- readRDS(i)
+  cellchat<- subsetCellChat(cellchat, idents.use = c("Tumor","iCAF"))
+  
+  # Store the cellchat object in the list under the derived name
+  cellchats[[name]] <- cellchat
+}
+```
+```{r}
+for (i in (1:length(cellchats))){
+cellchats[[i]] <- netAnalysis_computeCentrality(cellchats[[i]], slot.name = "netP") # the slot 'netP' means the inferred intercellular communication
+}
+```
+
+```{r}
+names(cellchats) <- c("X0", "XX", "XY")
+```
+
+```{r}
+i <- 1
+pathway.union <- union(cellchats[[i]]@netP$pathways, cellchats[[i+1]]@netP$pathways)
+pathway.union <- union(pathway.union, cellchats[[i+2]]@netP$pathways)
+```
+
+```{r}
+library(CellChat)
+i <- 3
+name <- names(cellchats[i])
+object <- cellchats[[i]] 
+signaling = pathway.union
+pattern = c("outgoing") 
+slot.name = "netP"
+color.use = NULL 
+color.heatmap = "BuGn"
+title = NULL
+width = 10
+height = 8
+font.size = 8 
+font.size.title = 10
+cluster.rows = FALSE 
+cluster.cols = FALSE
+                                             
+  if (length(slot(object, slot.name)$centr) == 0) {
+    stop("Please run `netAnalysis_computeCentrality` to compute the network centrality scores! ")
+  }
+  centr <- slot(object, slot.name)$centr
+  outgoing <- matrix(0, nrow = nlevels(object@idents), ncol = length(centr))
+  incoming <- matrix(0, nrow = nlevels(object@idents), ncol = length(centr))
+  dimnames(outgoing) <- list(levels(object@idents), names(centr))
+  dimnames(incoming) <- dimnames(outgoing)
+  for (i in 1:length(centr)) {
+    outgoing[,i] <- centr[[i]]$outdeg
+    incoming[,i] <- centr[[i]]$indeg
+  }
+  if (pattern == "outgoing") {
+    mat <- t(outgoing)
+    legend.name <- "Outgoing"
+  } else if (pattern == "incoming") {
+    mat <- t(incoming)
+    legend.name <- "Incoming"
+  } else if (pattern == "all") {
+    mat <- t(outgoing+ incoming)
+    legend.name <- "Overall"
+  }
+  if (is.null(title)) {
+    title <- paste0(legend.name, " signaling patterns")
+  } else {
+    title <- paste0(paste0(legend.name, " signaling patterns"), " - ",title)
+  }
+
+  if (!is.null(signaling)) {
+    mat1 <- mat[rownames(mat) %in% signaling, , drop = FALSE]
+    mat <- matrix(0, nrow = length(signaling), ncol = ncol(mat))
+    idx <- match(rownames(mat1), signaling)
+    mat[idx[!is.na(idx)], ] <- mat1
+    dimnames(mat) <- list(signaling, colnames(mat1))
+  }
+  mat.ori <- mat
+  mat <- sweep(mat, 1L, apply(mat, 1, max), '/', check.margin = FALSE)
+  mat[mat == 0] <- NA
+  mat <- mat[!apply(mat, 1, function(row) all(is.nan(row))), ]
+
+
+  if (is.null(color.use)) {
+    color.use <- scPalette(length(colnames(mat)))
+  }
+  color.heatmap.use = grDevices::colorRampPalette((RColorBrewer::brewer.pal(n = 9, name = color.heatmap)))(100)
+
+  df<- data.frame(group = colnames(mat)); rownames(df) <- colnames(mat)
+  names(color.use) <- colnames(mat)
+
+  pSum <- rowSums(mat)
+  pSum.original <- pSum
+  pSum <- -1/log(pSum)
+  pSum[is.na(pSum)] <- 0
+  idx1 <- which(is.infinite(pSum) | pSum < 0)
+  if (length(idx1) > 0) {
+    values.assign <- seq(max(pSum)*1.1, max(pSum)*1.5, length.out = length(idx1))
+    position <- sort(pSum.original[idx1], index.return = TRUE)$ix
+    pSum[idx1] <- values.assign[match(1:length(idx1), position)]
+  }
+  if (min(mat, na.rm = T) == max(mat, na.rm = T)) {
+    legend.break <- max(mat, na.rm = T)
+  } else {
+    legend.break <- c(round(min(mat, na.rm = T), digits = 1), round(max(mat, na.rm = T), digits = 1))
+  }
+
+```
+
+```{r}
+# for i=1, X0
+X0 <- mat
+#for i=2
+XX <- mat
+#for i=3
+XY <- mat
+```
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(tibble)
+
+
+# Convert matrices to data frames and add a row identifier
+XX <- as.data.frame(XX) %>% tibble::rownames_to_column("row_id")
+X0 <- as.data.frame(X0) %>% tibble::rownames_to_column("row_id")
+XY <- as.data.frame(XY) %>% tibble::rownames_to_column("row_id")
+
+# Create a full set of unique row identifiers
+all_rows <- union(union(XX$row_id, X0$row_id), XY$row_id)
+
+# Ensure each data frame has all the rows, filling missing with NA
+XX_complete <- XX %>% complete(row_id = all_rows)
+X0_complete <- X0 %>% complete(row_id = all_rows)
+XY_complete <- XY %>% complete(row_id = all_rows)
+
+# Set row names back and remove the row_id column
+rownames(XX_complete) <- XX_complete$row_id
+rownames(X0_complete) <- X0_complete$row_id
+rownames(XY_complete) <- XY_complete$row_id
+
+# Remove the row_id column after setting rownames
+XX_complete <- XX_complete %>% select(-row_id)
+X0_complete <- X0_complete %>% select(-row_id)
+XY_complete <- XY_complete %>% select(-row_id)
+
+# Ensure unique column names before binding
+colnames(XX_complete) <- paste0("XX_", colnames(XX_complete))
+colnames(X0_complete) <- paste0("X0_", colnames(X0_complete))
+colnames(XY_complete) <- paste0("XY_", colnames(XY_complete))
+
+# Merge the data frames by row names
+merged_df <- bind_cols(XX_complete, X0_complete, XY_complete)
+rownames(merged_df) <- rownames(XX_complete)
+
+write.csv(merged_df, "/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/tumor_iCAF_pathway_outgoing_scores_XX_XY_X0.csv")
+```
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(pheatmap)
+
+# Step 1: Load the data
+# Make sure to adjust the file path accordingly
+data <- read.csv("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/tumor_iCAF_pathway_incoming_scores_XX_XY_X0.csv", row.names = 1)
+
+# Prepare pathway data matrix with pathways as rows and groups as columns
+# Make sure row names are set correctly
+pathway_data <- as.matrix(data[, c("XX_iCAF", "XY_iCAF", "X0_iCAF")])
+rownames(pathway_data) <- data$`Unnamed: 0`
+
+# Check if the row names were assigned correctly
+print("Row names of pathway_data:")
+print(rownames(pathway_data))
+rownames(pathway_data) <- rownames(data)
+ 
+# Step 1: Calculate Fold Changes
+# Calculate the absolute fold changes between each pair of conditions
+fold_change_XX_XY <- abs(pathway_data[, "XX_iCAF"] - pathway_data[, "XY_iCAF"])
+fold_change_XX_X0 <- abs(pathway_data[, "XX_iCAF"] - pathway_data[, "X0_iCAF"])
+fold_change_XY_X0 <- abs(pathway_data[, "XY_iCAF"] - pathway_data[, "X0_iCAF"])
+
+# Combine fold changes into a data frame and check dimensions
+fold_change_df <- data.frame(
+  Pathway = rownames(pathway_data),
+  XXvsXY = fold_change_XX_XY,
+  XXvsX0 = fold_change_XX_X0,
+  XYvsX0 = fold_change_XY_X0
+)
+
+print("Dimensions of fold_change_df:")
+print(dim(fold_change_df))
+
+# Calculate the max fold change across comparisons for ranking
+fold_change_df <- fold_change_df %>%
+  mutate(Max_Fold_Change = pmax(XXvsXY, XXvsX0, XYvsX0)) %>%
+  arrange(desc(Max_Fold_Change)) %>%
+  head(15)# Select top 10 pathways with highest fold changes
+
+# Step 2: Select Top Pathways for Heatmap
+# Extract only the top pathways from the original data
+top_pathways <- pathway_data[rownames(pathway_data) %in% fold_change_df$Pathway, ]
+
+```
+```{r}
+# Load the necessary library
+library(pheatmap)
+
+# Create a heatmap with row clustering
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/Tumor_To_iCAF_incoming.pdf", width = 10, height = 6) 
+
+# Step 3: Plot Heatmap
+pheatmap(top_pathways,
+         cluster_rows = TRUE,         # Cluster pathways based on similarity
+         cluster_cols = FALSE,        # Keep the groups in the order XX, XY, X0
+         display_numbers = F,      # Display the pathway values in each cell
+         color = colorRampPalette(c("white", "darkblue"))(50),
+         main = "iCAF: Top 15 Differentially Communicating Pathways (Incoming Tumor -> iCAF)",
+         labels_col = c("XX", "XY", "X0"),
+         border_color = NA)
+dev.off()
+```
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(pheatmap)
+
+# Step 1: Load the data
+# Make sure to adjust the file path accordingly
+data <- read.csv("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/tumor_iCAF_pathway_incoming_scores_XX_XY_X0.csv", row.names = 1)
+
+# Prepare pathway data matrix with pathways as rows and groups as columns
+# Make sure row names are set correctly
+pathway_data <- as.matrix(data[, c("XX_iCAF", "XY_iCAF", "X0_iCAF")])
+rownames(pathway_data) <- data$`Unnamed: 0`
+
+# Check if the row names were assigned correctly
+print("Row names of pathway_data:")
+print(rownames(pathway_data))
+rownames(pathway_data) <- rownames(data)
+ 
+# Step 1: Calculate Fold Changes
+# Calculate the absolute fold changes between each pair of conditions
+fold_change_XX_XY <- abs(pathway_data[, "XX_iCAF"] - pathway_data[, "XY_iCAF"])
+fold_change_XX_X0 <- abs(pathway_data[, "XX_iCAF"] - pathway_data[, "X0_iCAF"])
+fold_change_XY_X0 <- abs(pathway_data[, "XY_iCAF"] - pathway_data[, "X0_iCAF"])
+
+# Combine fold changes into a data frame and check dimensions
+fold_change_df <- data.frame(
+  Pathway = rownames(pathway_data),
+  XXvsXY = fold_change_XX_XY,
+  XXvsX0 = fold_change_XX_X0,
+  XYvsX0 = fold_change_XY_X0
+)
+
+print("Dimensions of fold_change_df:")
+print(dim(fold_change_df))
+
+# Calculate the max fold change across comparisons for ranking
+fold_change_df <- fold_change_df %>%
+  mutate(Max_Fold_Change = pmax(XXvsXY, XXvsX0, XYvsX0)) %>%
+  arrange(desc(Max_Fold_Change)) %>%
+  head(15)# Select top 10 pathways with highest fold changes
+
+# Step 2: Select Top Pathways for Heatmap
+# Extract only the top pathways from the original data
+top_pathways <- pathway_data[rownames(pathway_data) %in% fold_change_df$Pathway, ]
+
+```
+```{r}
+# Load the necessary library
+library(pheatmap)
+
+# Create a heatmap with row clustering
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/Tumor_To_iCAF_incoming.pdf", width = 10, height = 6) 
+
+# Step 3: Plot Heatmap
+pheatmap(top_pathways,
+         cluster_rows = TRUE,         # Cluster pathways based on similarity
+         cluster_cols = FALSE,        # Keep the groups in the order XX, XY, X0
+         display_numbers = F,      # Display the pathway values in each cell
+         color = colorRampPalette(c("white", "darkblue"))(50),
+         main = "iCAF: Top 15 Differentially Communicating Pathways (Incoming Tumor -> iCAF)",
+         labels_col = c("XX", "XY", "X0"),
+         border_color = NA)
+dev.off()
+```
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(pheatmap)
+
+# Step 1: Load the data
+# Adjust the file path to the correct location
+data <- read.csv("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/tumor_iCAF_pathway_incoming_scores_XX_XY_X0.csv", row.names = 1)
+
+# Prepare pathway data matrix with pathways as rows and groups as columns
+# Here we set row names based on pathway names
+pathway_data <- as.matrix(data[, c("XX_Tumor", "XY_Tumor", "X0_Tumor")])  # Adjusted for Tumor to iCAF analysis
+rownames(pathway_data) <- rownames(data)
+
+# Step 1: Calculate Fold Changes
+# Calculate the absolute fold changes between each pair of conditions for tumor pathways
+fold_change_XX_XY <- abs(pathway_data[, "XX_Tumor"] - pathway_data[, "XY_Tumor"])
+fold_change_XX_X0 <- abs(pathway_data[, "XX_Tumor"] - pathway_data[, "X0_Tumor"])
+fold_change_XY_X0 <- abs(pathway_data[, "XY_Tumor"] - pathway_data[, "X0_Tumor"])
+
+# Combine fold changes into a data frame for ranking
+fold_change_df <- data.frame(
+  Pathway = rownames(pathway_data),
+  XXvsXY = fold_change_XX_XY,
+  XXvsX0 = fold_change_XX_X0,
+  XYvsX0 = fold_change_XY_X0
+)
+
+# Calculate the max fold change across comparisons for ranking and select top 15
+fold_change_df <- fold_change_df %>%
+  mutate(Max_Fold_Change = pmax(XXvsXY, XXvsX0, XYvsX0)) %>%
+  arrange(desc(Max_Fold_Change)) %>%
+  head(15)  # Select top 15 pathways with highest fold changes
+
+# Step 2: Select Top Pathways for Heatmap
+# Extract only the top pathways from the original data
+top_pathways <- pathway_data[rownames(pathway_data) %in% fold_change_df$Pathway, ]
+
+```
+
+```{r}
+# Step 3: Plot Heatmap
+# Save the heatmap to a PDF file for a Tumor -> iCAF pathway communication plot
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/iCAF_To_Tumor_incoming.pdf", width = 10, height = 6) 
+
+pheatmap(top_pathways,
+         cluster_rows = TRUE,         # Cluster pathways based on similarity
+         cluster_cols = FALSE,        # Keep the groups in the order XX, XY, X0
+         display_numbers = FALSE,     # Disable pathway values in cells
+         color = colorRampPalette(c("white", "darkred"))(50),
+         main = "Tumor: Top 15 Differentially Communicating Pathways (Incoming iCAF -> Tumor)",
+         labels_col = c("XX", "XY", "X0"),
+         border_color = NA)           # Remove grid lines
+dev.off()
+```
+        
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(pheatmap)
+
+# Step 1: Load the data
+# Adjust the file path to the correct location
+data <- read.csv("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/tumor_iCAF_pathway_incoming_scores_XX_XY_X0.csv", row.names = 1)
+
+# Prepare pathway data matrix with pathways as rows and groups as columns
+# Here we set row names based on pathway names
+pathway_data <- as.matrix(data[, c("XX_Tumor", "XY_Tumor", "X0_Tumor")])  # Adjusted for Tumor to iCAF analysis
+rownames(pathway_data) <- rownames(data)
+
+# Step 1: Calculate Fold Changes
+# Calculate the absolute fold changes between each pair of conditions for tumor pathways
+fold_change_XX_XY <- abs(pathway_data[, "XX_Tumor"] - pathway_data[, "XY_Tumor"])
+fold_change_XX_X0 <- abs(pathway_data[, "XX_Tumor"] - pathway_data[, "X0_Tumor"])
+fold_change_XY_X0 <- abs(pathway_data[, "XY_Tumor"] - pathway_data[, "X0_Tumor"])
+
+# Combine fold changes into a data frame for ranking
+fold_change_df <- data.frame(
+  Pathway = rownames(pathway_data),
+  XXvsXY = fold_change_XX_XY,
+  XXvsX0 = fold_change_XX_X0,
+  XYvsX0 = fold_change_XY_X0
+)
+
+# Calculate the max fold change across comparisons for ranking and select top 15
+fold_change_df <- fold_change_df %>%
+  mutate(Max_Fold_Change = pmax(XXvsXY, XXvsX0, XYvsX0)) %>%
+  arrange(desc(Max_Fold_Change)) %>%
+  head(15)  # Select top 15 pathways with highest fold changes
+
+# Step 2: Select Top Pathways for Heatmap
+# Extract only the top pathways from the original data
+top_pathways <- pathway_data[rownames(pathway_data) %in% fold_change_df$Pathway, ]
+
+```
+
+```{r}
+# Step 3: Plot Heatmap
+# Save the heatmap to a PDF file for a Tumor -> iCAF pathway communication plot
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/Tumor_To_iCAF_outgoing.pdf", width = 10, height = 6) 
+
+pheatmap(top_pathways,
+         cluster_rows = TRUE,         # Cluster pathways based on similarity
+         cluster_cols = FALSE,        # Keep the groups in the order XX, XY, X0
+         display_numbers = FALSE,     # Disable pathway values in cells
+         color = colorRampPalette(c("white", "darkred"))(50),
+         main = "Tumor: Top 15 Differentially Communicating Pathways (Outgoing: Tumor -> iCAF)",
+         labels_col = c("XX", "XY", "X0"),
+         border_color = NA)           # Remove grid lines
+dev.off()
+```
+```{r}
+calculate_average_julian <- function(x,y) {
+m <- (x+y)/2
+p <- sqrt(x^2+y^2-(x*y))
+return(1/4*(-m*p-(1-m)*sqrt(1-2*m+p^2)+(m^2-p^2)*log((m+p)/(sqrt(1-2*m+p^2)-(1-m))))^2)
+}
+
+# Define the custom function to calculate the 'julian' value with the specified logic
+calculate_julian <- function(x) {
+  # Count NAs in the row
+  na_count <- sum(is.na(x))
+  
+  # If two or more values are NA, return NA
+  if (na_count >= 2) {
+    return(NA)
+  }
+  
+  # If one value is NA, compute the absolute difference of the two non-NA values
+  if (na_count == 1) {
+    return(abs(diff(x[!is.na(x)]))^2)
+  }
+  
+  # If no values are NA, use the full equation
+  return(x[1]^2 + x[2]^2 + x[3]^2 - ((x[1] * x[2]) + (x[1] * x[3]) + (x[2] * x[3])))
+}
+
+
+```
+
+```{r}
+calculate_average_julian <- function(x, y) {
+  m <- (x + y) / 2
+  p <- sqrt(x^2 + y^2 - (x * y))
+  return(1/4 * (-m * p - (1 - m) * sqrt(1 - 2 * m + p^2) + (m^2 - p^2) * log((m + p) / (sqrt(1 - 2 * m + p^2) - (1 - m))))^2)
+}
+
+calculate_julian <- function(x) {
+  # Count NAs in the row
+  na_count <- sum(is.na(x))
+  
+  # If two or more values are NA, return NA
+  if (na_count >= 2) {
+    return(NA)
+  }
+  
+  # If one value is NA, compute the 'julian' value using the two non-NA values
+  if (na_count == 1) {
+    non_na_values <- x[!is.na(x)]
+    return(calculate_average_julian(non_na_values[1], non_na_values[2]))
+  }
+  
+  # If no values are NA, use the full equation
+  return(x[1]^2 + x[2]^2 + x[3]^2 - ((x[1] * x[2]) + (x[1] * x[3]) + (x[2] * x[3])))
+}
+
+
+```
+
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(pheatmap)
+
+# Step 1: Load the data
+# Adjust the file path to the correct location
+data <- read.csv("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/tumor_iCAF_pathway_incoming_scores_XX_XY_X0.csv", row.names = 1)
+
+# Prepare pathway data matrix with pathways as rows and groups as columns
+# Here we set row names based on pathway names
+pathway_data <- as.matrix(data[, c("XX_Tumor", "XY_Tumor", "X0_Tumor")])  # Adjusted for Tumor to iCAF analysis
+rownames(pathway_data) <- rownames(data)
+
+# Apply the function row-wise to calculate the 'julian' values for all pathways
+julian_XX_XY <- apply(pathway_data, 1, calculate_julian)
+
+# Add the 'julian' values as a new column in fold_change_df for sorting or analysis
+fold_change_df <- data.frame(
+  Pathway = rownames(pathway_data),
+  Julian_Value = julian_XX_XY
+)
+
+# Sort the data frame by the Julian_Value in descending order and take the top 15 pathways
+incoming_tumor <- fold_change_df %>%
+  arrange(desc(Julian_Value)) %>%
+  head(20)
+
+# Step 2: Reorder the Pathway Data Based on Top 15 Julian_Values
+# Filter pathway_data to include only the top 15 pathways
+ordered_pathways <- pathway_data[top_15_pathways$Pathway, ]
+ordered_pathwaysincoming_tumor <- pathway_data[incoming_tumor$Pathway, ]
+
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/15top_iCAF_tumor_incoming.pdf", width = 10, height = 6)
+
+# Step 3: Plot Heatmap of Top 15 Pathways ordered by Julian_Value
+pheatmap(ordered_pathways,
+         cluster_rows = FALSE,        # No clustering; pathways are ordered by Julian_Value
+         cluster_cols = FALSE,        # Keep the groups in the order XX, XY, X0
+         display_numbers = FALSE,     # Display pathway values if needed
+         color = colorRampPalette(c("white", "darkred"))(50),
+         main = "Top 15 Pathways incoming to Tumor (iCAFs -> Tumor)",
+         labels_col = c("XX", "XY", "X0"),
+         border_color = NA,
+         na_col = "bisque2")           # Remove grid lines         # Remove grid lines
+dev.off()
+
+```
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(pheatmap)
+
+# Step 1: Load the data
+# Adjust the file path to the correct location
+data <- read.csv("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/tumor_iCAF_pathway_incoming_scores_XX_XY_X0.csv", row.names = 1)
+
+# Prepare pathway data matrix with pathways as rows and groups as columns
+# Here we set row names based on pathway names
+pathway_data <- as.matrix(data[, c("XX_iCAF", "XY_iCAF", "X0_iCAF")])  # Adjusted for Tumor to iCAF analysis
+rownames(pathway_data) <- rownames(data)
+
+# Apply the function row-wise to calculate the 'julian' values for all pathways
+julian_XX_XY <- apply(pathway_data, 1, calculate_julian)
+
+# Add the 'julian' values as a new column in fold_change_df for sorting or analysis
+fold_change_df <- data.frame(
+  Pathway = rownames(pathway_data),
+  Julian_Value = julian_XX_XY
+)
+
+# Sort the data frame by the Julian_Value in descending order and take the top 15 pathways
+incoming_icaf <- fold_change_df %>%
+  arrange(desc(Julian_Value)) %>%
+  head(20)
+
+# Step 2: Reorder the Pathway Data Based on Top 15 Julian_Values
+# Filter pathway_data to include only the top 15 pathways
+ordered_pathways <- pathway_data[top_15_pathways$Pathway, ]
+ordered_pathways_incoming_icaf <- pathway_data[incoming_icaf$Pathway, ]
+
+#pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/15top_tumor_iCAF_incoming.pdf", width = 10, height = 6)
+
+# Step 3: Plot Heatmap of Top 15 Pathways ordered by Julian_Value
+pheatmap(ordered_pathways,
+         cluster_rows = FALSE,        # No clustering; pathways are ordered by Julian_Value
+         cluster_cols = FALSE,        # Keep the groups in the order XX, XY, X0
+         display_numbers = FALSE,     # Display pathway values if needed
+         color = colorRampPalette(c("white", "cadetblue4"))(50),
+         main = "Top 15 Pathways incoming to iCAF (Tumor -> iCAFs)",
+         labels_col = c("XX", "XY", "X0"),
+         border_color = NA,
+         na_col = "bisque2")           # Remove grid lines         # Remove grid lines
+#dev.off()
+
+```
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(pheatmap)
+
+# Step 1: Load the data
+# Adjust the file path to the correct location
+data <- read.csv("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/tumor_iCAF_pathway_outgoing_scores_XX_XY_X0.csv", row.names = 1)
+
+# Prepare pathway data matrix with pathways as rows and groups as columns
+# Here we set row names based on pathway names
+pathway_data <- as.matrix(data[, c("XX_Tumor", "XY_Tumor", "X0_Tumor")])  # Adjusted for Tumor to iCAF analysis
+rownames(pathway_data) <- rownames(data)
+
+# Apply the function row-wise to calculate the 'julian' values for all pathways
+julian_XX_XY <- apply(pathway_data, 1, calculate_julian)
+
+# Add the 'julian' values as a new column in fold_change_df for sorting or analysis
+fold_change_df <- data.frame(
+  Pathway = rownames(pathway_data),
+  Julian_Value = julian_XX_XY
+)
+
+# Sort the data frame by the Julian_Value in descending order and take the top 15 pathways
+outgoing_tumor <- fold_change_df %>%
+  arrange(desc(Julian_Value)) %>%
+  head(20)
+
+# Step 2: Reorder the Pathway Data Based on Top 15 Julian_Values
+# Filter pathway_data to include only the top 15 pathways
+ordered_pathways <- pathway_data[top_15_pathways$Pathway, ]
+# Filter pathway_data to include only the top 15 pathways
+ordered_pathways_outgoing_tumor <- pathway_data[outgoing_tumor$Pathway, ]
+
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/15top_iCAF_tumor_outgoing.pdf", width = 10, height = 6)
+
+# Step 3: Plot Heatmap of Top 15 Pathways ordered by Julian_Value
+pheatmap(ordered_pathways,
+         cluster_rows = FALSE,        # No clustering; pathways are ordered by Julian_Value
+         cluster_cols = FALSE,        # Keep the groups in the order XX, XY, X0
+         display_numbers = FALSE,     # Display pathway values if needed
+         color = colorRampPalette(c("white", "darkred"))(50),
+         main = "Top 15 Pathways outgoing from Tumor (Tumor -> iCAFs)",
+         labels_col = c("XX", "XY", "X0"),
+         border_color = NA,
+         na_col = "bisque2")           # Remove grid lines         # Remove grid lines
+dev.off()
+
+```
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(pheatmap)
+
+# Step 1: Load the data
+# Adjust the file path to the correct location
+data <- read.csv("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/tumor_iCAF_pathway_incoming_scores_XX_XY_X0.csv", row.names = 1)
+
+# Prepare pathway data matrix with pathways as rows and groups as columns
+# Here we set row names based on pathway names
+pathway_data <- as.matrix(data[, c("XX_iCAF", "XY_iCAF", "X0_iCAF")])  # Adjusted for Tumor to iCAF analysis
+rownames(pathway_data) <- rownames(data)
+
+# Apply the function row-wise to calculate the 'julian' values for all pathways
+julian_XX_XY <- apply(pathway_data, 1, calculate_julian)
+
+# Add the 'julian' values as a new column in fold_change_df for sorting or analysis
+fold_change_df <- data.frame(
+  Pathway = rownames(as.data.frame(pathway_data)),
+  Julian_Value = julian_XX_XY
+)
+
+# Sort the data frame by the Julian_Value in descending order and take the top 15 pathways
+top_15_pathways <- fold_change_df %>%
+  arrange(desc(Julian_Value)) %>%
+  head(20)
+
+# Step 2: Reorder the Pathway Data Based on Top 15 Julian_Values
+# Filter pathway_data to include only the top 15 pathways
+ordered_pathways <- pathway_data[top_15_pathways$Pathway, ]
+
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/20top_tumor_iCAF_incoming_cluster.pdf", width = 10, height = 6)
+
+# Step 3: Plot Heatmap of Top 15 Pathways ordered by Julian_Value
+pheatmap(ordered_pathways,
+         cluster_rows = T,        # No clustering; pathways are ordered by Julian_Value
+         cluster_cols = FALSE,        # Keep the groups in the order XX, XY, X0
+         display_numbers = FALSE,     # Display pathway values if needed
+         color = colorRampPalette(c("white", "cadetblue4"))(50),
+         main = "Pathways incoming to iCAF (Tumor -> iCAFs)",
+         labels_col = c("XX", "XY", "X0"),
+         border_color = NA,
+         na_col = "bisque2")           # Remove grid lines         # Remove grid lines
+dev.off()
+
+```
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(pheatmap)
+
+# Step 1: Load the data
+# Adjust the file path to the correct location
+data <- read.csv("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/tumor_iCAF_pathway_incoming_scores_XX_XY_X0.csv", row.names = 1)
+
+# Prepare pathway data matrix with pathways as rows and groups as columns
+# Here we set row names based on pathway names
+pathway_data <- as.matrix(data[, c("XX_Tumor", "XY_Tumor", "X0_Tumor")])  # Adjusted for Tumor to iCAF analysis
+rownames(pathway_data) <- rownames(data)
+
+# Apply the function row-wise to calculate the 'julian' values for all pathways
+julian_XX_XY <- apply(pathway_data, 1, calculate_julian)
+
+# Add the 'julian' values as a new column in fold_change_df for sorting or analysis
+fold_change_df <- data.frame(
+  Pathway = rownames(pathway_data),
+  Julian_Value = julian_XX_XY
+)
+
+# Sort the data frame by the Julian_Value in descending order and take the top 15 pathways
+top_15_pathways <- fold_change_df %>%
+  arrange(desc(Julian_Value)) %>%
+  head(20)
+
+# Step 2: Reorder the Pathway Data Based on Top 15 Julian_Values
+# Filter pathway_data to include only the top 15 pathways
+ordered_pathways <- pathway_data[top_15_pathways$Pathway, ]
+
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/20top_iCAF_tumor_incoming_cluster.pdf", width = 10, height = 6)
+
+# Step 3: Plot Heatmap of Top 15 Pathways ordered by Julian_Value
+pheatmap(ordered_pathways,
+         cluster_rows = T,        # No clustering; pathways are ordered by Julian_Value
+         cluster_cols = FALSE,        # Keep the groups in the order XX, XY, X0
+         display_numbers = FALSE,     # Display pathway values if needed
+         color = colorRampPalette(c("white", "darkred"))(50),
+         main = "Pathways incoming to Tumor (iCAFs -> Tumor)",
+         labels_col = c("XX", "XY", "X0"),
+         border_color = NA,
+         na_col = "bisque2")           # Remove grid lines         # Remove grid lines
+dev.off()
+
+```
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(pheatmap)
+
+# Step 1: Load the data
+# Adjust the file path to the correct location
+data <- read.csv("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/tumor_iCAF_pathway_outgoing_scores_XX_XY_X0.csv", row.names = 1)
+
+# Prepare pathway data matrix with pathways as rows and groups as columns
+# Here we set row names based on pathway names
+pathway_data <- as.matrix(data[, c("XX_Tumor", "XY_Tumor", "X0_Tumor")])  # Adjusted for Tumor to iCAF analysis
+rownames(pathway_data) <- data$XY_row_id
+
+# Apply the function row-wise to calculate the 'julian' values for all pathways
+julian_XX_XY <- apply(pathway_data, 1, calculate_julian)
+
+# Add the 'julian' values as a new column in fold_change_df for sorting or analysis
+fold_change_df <- data.frame(
+  Pathway = rownames(pathway_data),
+  Julian_Value = julian_XX_XY
+)
+
+# Sort the data frame by the Julian_Value in descending order and take the top 15 pathways
+outgoing_tumor <- fold_change_df %>%
+  arrange(desc(Julian_Value)) %>%
+  head(20)
+
+# Step 2: Reorder the Pathway Data Based on Top 15 Julian_Values
+# Filter pathway_data to include only the top 15 pathways
+ordered_pathways <- pathway_data[outgoing_tumor$Pathway, ]
+ordered_pathways_outgoing_tumor <- pathway_data[outgoing_tumor$Pathway, ]
+
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/20top_iCAF_tumor_outgoing_cluster.pdf", width = 10, height = 6)
+
+# Step 3: Plot Heatmap of Top 15 Pathways ordered by Julian_Value
+pheatmap(ordered_pathways,
+         cluster_rows = T,        # No clustering; pathways are ordered by Julian_Value
+         cluster_cols = FALSE,        # Keep the groups in the order XX, XY, X0
+         display_numbers = FALSE,     # Display pathway values if needed
+         color = colorRampPalette(c("white", "darkred"))(50),
+         main = "Pathways outgoing from Tumor (Tumor -> iCAFs)",
+         labels_col = c("XX", "XY", "X0"),
+         border_color = NA,
+         na_col = "bisque2")           # Remove grid lines         # Remove grid lines
+dev.off()
+
+```
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(pheatmap)
+
+# Step 1: Load the data
+# Adjust the file path to the correct location
+data <- read.csv("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/tumor_iCAF_pathway_outgoing_scores_XX_XY_X0.csv", row.names = 1)
+
+# Prepare pathway data matrix with pathways as rows and groups as columns
+# Here we set row names based on pathway names
+pathway_data <- as.matrix(data[, c("XX_iCAF", "XY_iCAF", "X0_iCAF")])  # Adjusted for Tumor to iCAF analysis
+rownames(pathway_data) <- data$XY_row_id
+
+# Apply the function row-wise to calculate the 'julian' values for all pathways
+julian_XX_XY <- apply(pathway_data, 1, calculate_julian)
+
+# Add the 'julian' values as a new column in fold_change_df for sorting or analysis
+fold_change_df <- data.frame(
+  Pathway = rownames(pathway_data),
+  Julian_Value = julian_XX_XY
+)
+
+# Sort the data frame by the Julian_Value in descending order and take the top 15 pathways
+outgoing_icaf <- fold_change_df %>%
+  arrange(desc(Julian_Value)) %>%
+  head(20)
+
+# Step 2: Reorder the Pathway Data Based on Top 15 Julian_Values
+# Filter pathway_data to include only the top 15 pathways
+ordered_pathways <- pathway_data[top_15_pathways$Pathway, ]
+ordered_pathways_outgoing_icaf <- pathway_data[outgoing_icaf$Pathway, ]
+
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/20top_tumor_iCAF_outgoing_cluster.pdf", width = 10, height = 6)
+
+# Step 3: Plot Heatmap of Top 15 Pathways ordered by Julian_Value
+pheatmap(ordered_pathways,
+         cluster_rows = T,        # No clustering; pathways are ordered by Julian_Value
+         cluster_cols = FALSE,        # Keep the groups in the order XX, XY, X0
+         display_numbers = FALSE,     # Display pathway values if needed
+         color = colorRampPalette(c("white", "cadetblue4"))(50),
+         main = "Pathways outgoing from iCAF (iCAFs -> Tumor)",
+         labels_col = c("XX", "XY", "X0"),
+         border_color = NA,
+         na_col = "bisque2")           # Remove grid lines         # Remove grid lines
+dev.off()
+
+```
+
+
+```{r}
+# Assuming the data frames with top pathways are named top_15_outgoing_icaf and top_15_incoming_tumor
+common_pathways <- intersect(outgoing_icaf$Pathway, incoming_tumor$Pathway)
+
+# Filter both datasets to keep only the common pathways
+outgoing_icaf_common <- ordered_pathways_outgoing_icaf[common_pathways, ]
+incoming_tumor_common <- ordered_pathwaysincoming_tumor[common_pathways, ]
+```
+
+```{r}
+# Combine the data for the common pathways into a single data frame
+library(dplyr)
+library(tidyr)
+
+outgoing_icaf_common_df <- as.data.frame(outgoing_icaf_common) %>% 
+  tibble::rownames_to_column("Pathway") %>%
+  pivot_longer(cols = -Pathway, names_to = "Group", values_to = "Score") %>%
+  mutate(Direction = "Outgoing iCAF")
+
+incoming_tumor_common_df <- as.data.frame(incoming_tumor_common) %>%
+  tibble::rownames_to_column("Pathway") %>%
+  pivot_longer(cols = -Pathway, names_to = "Group", values_to = "Score") %>%
+  mutate(Direction = "Incoming Tumor")
+
+# Combine both data frames for plotting
+combined_df <- bind_rows(outgoing_icaf_common_df, incoming_tumor_common_df)
+```
+
+```{r}
+# Arrange and pivot the combined data frame so that pathways appear in consecutive rows for each direction
+combined_df_heatmap <- combined_df %>%
+  arrange(Pathway, Direction) %>%
+  pivot_wider(names_from = Group, values_from = Score)
+
+# Summarize the columns for each chromosome dosage group (combine tumor and iCAF)
+combined_df_heatmap <- combined_df_heatmap %>%
+  mutate(
+    XX = coalesce(XX_Tumor, XX_iCAF),
+    XY = coalesce(XY_Tumor, XY_iCAF),
+    X0 = coalesce(X0_Tumor, X0_iCAF)
+  ) %>%
+  select(Pathway, Direction, XX, XY, X0)
+```
+
+```{r}
+# Save the row names first
+row_names <- paste(combined_df_heatmap$Pathway, combined_df_heatmap$Direction, sep = "_")
+
+# Remove the 'Pathway' and 'Direction' columns as they are now represented in the row names
+combined_df_heatmap <- combined_df_heatmap %>%
+  select(-Pathway, -Direction)
+
+# Assign the saved row names back to the data frame
+rownames(combined_df_heatmap) <- row_names
+```
+```{r}
+# Create a data frame for row annotation
+row_annotation <- data.frame(
+  Type = ifelse(grepl("Incoming Tumor", row_names), "Tumor", "iCAF")
+)
+rownames(row_annotation) <- row_names  # Match row names with the heatmap data
+
+# Define colors for the row annotation
+annotation_colors <- list(
+  Type = c(Tumor = "darkred", iCAF = "cadetblue4")
+)
+```
+
+
+```{r}
+library(pheatmap)
+
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/shared_pathways_tumor_icaf.pdf", width = 10, height = 6)
+
+# Generate the heatmap with row color annotations
+pheatmap(as.matrix(combined_df_heatmap),
+         cluster_rows = FALSE,          # Maintain the ordered pathways
+         cluster_cols = FALSE,          # Do not cluster columns
+         color = colorRampPalette(c("white", "darkseagreen4"))(50),
+         main = "Shared Pathways (Incoming Tumor vs Outgoing iCAF)",
+         border_color = NA,
+         na_col = "bisque2",            # Color for NA values
+         annotation_row = row_annotation,  # Add row annotations for Type
+         annotation_colors = annotation_colors)  # Specify annotation colors
+dev.off()
+```
+
+```{r}
+# Assuming the data frames with top pathways are named top_15_outgoing_tumor and top_15_incoming_icaf
+common_pathways <- intersect(outgoing_tumor$Pathway,incoming_icaf$Pathway)
+
+# Filter both datasets to keep only the common pathways
+outgoing_tumor_common <- ordered_pathways_outgoing_tumor[common_pathways, ]
+incoming_icaf_common <- ordered_pathways_incoming_icaf[common_pathways, ]
+```
+
+```{r}
+# Combine the data for the common pathways into a single data frame
+outgoing_tumor_common_df <- as.data.frame(outgoing_tumor_common) %>%
+  tibble::rownames_to_column("Pathway") %>%
+  pivot_longer(cols = -Pathway, names_to = "Group", values_to = "Score") %>%
+  mutate(Direction = "Outgoing Tumor")
+
+incoming_icaf_common_df <- as.data.frame(incoming_icaf_common) %>%
+  tibble::rownames_to_column("Pathway") %>%
+  pivot_longer(cols = -Pathway, names_to = "Group", values_to = "Score") %>%
+  mutate(Direction = "Incoming iCAF")
+
+# Combine both data frames for plotting
+combined_df <- bind_rows(outgoing_tumor_common_df, incoming_icaf_common_df)
+```
+
+```{r}
+# Arrange and pivot the combined data frame so that pathways appear in consecutive rows for each direction
+combined_df_heatmap <- combined_df %>%
+  arrange(Pathway, Direction) %>%
+  pivot_wider(names_from = Group, values_from = Score)
+
+# Summarize the columns for each chromosome dosage group (combine tumor and iCAF)
+combined_df_heatmap <- combined_df_heatmap %>%
+  mutate(
+    XX = coalesce(XX_Tumor, XX_iCAF),
+    XY = coalesce(XY_Tumor, XY_iCAF),
+    X0 = coalesce(X0_Tumor, X0_iCAF)
+  ) %>%
+  select(Pathway, Direction, XX, XY, X0)
+```
+
+```{r}
+# Save the row names first
+row_names <- paste(combined_df_heatmap$Pathway, combined_df_heatmap$Direction, sep = "_")
+
+# Remove the 'Pathway' and 'Direction' columns as they are now represented in the row names
+combined_df_heatmap <- combined_df_heatmap %>%
+  select(-Pathway, -Direction)
+
+# Assign the saved row names back to the data frame
+rownames(combined_df_heatmap) <- row_names
+```
+```{r}
+# Create a data frame for row annotation
+row_annotation <- data.frame(
+  Type = ifelse(grepl("Incoming iCAF", row_names), "iCAF", "Tumor")
+)
+rownames(row_annotation) <- row_names  # Match row names with the heatmap data
+
+# Define colors for the row annotation
+annotation_colors <- list(
+  Type = c(Tumor = "darkred", iCAF = "cadetblue4")
+)
+```
+
+```{r}
+library(pheatmap)
+
+
+pdf("/omics/odcf/analysis/OE0509_projects/hnscc/single_cell/Single_Cell_Analysis/Single_Cell_Datasets/All_Cells_Together/Integration/Pathway_communication/shared_pathways_icaf_tumor.pdf", width = 10, height = 6)
+
+# Generate the heatmap with row color annotations
+pheatmap(as.matrix(combined_df_heatmap),
+         cluster_rows = FALSE,          # Maintain the ordered pathways
+         cluster_cols = FALSE,          # Do not cluster columns
+         color = colorRampPalette(c("white", "darkseagreen4"))(50),
+         main = "Shared Pathways (Outgoing Tumor vs Incoming iCAF)",
+         border_color = NA,
+         na_col = "bisque2",            # Color for NA values
+         annotation_row = row_annotation,  # Add row annotations for Type
+         annotation_colors = annotation_colors)  # Specify annotation colors
+dev.off()
+```
+

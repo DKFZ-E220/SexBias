@@ -1,0 +1,292 @@
+---
+title: "Untitled"
+output: html_document
+date: '2022-08-17'
+---
+
+```{r}
+Segment_CPTAC <- read.csv("HS_CPTAC_HNSCC_SCNA_log2_segment_level.cvs", sep = "\t")
+HNSC_SegmentFiles <- Segment_CPTAC
+```
+
+```{r}
+clinical_SSC_male <- read.csv("CPTAC_clinical_HNSSC_male.csv", sep = "\t")
+```
+
+
+Extract all the measures for the Y chromosome:
+
+```{r}
+HNSC_SegmentFiles_Y <- HNSC_SegmentFiles[HNSC_SegmentFiles$chromosome == "chrY",]
+```
+
+Divide the measures taking into consideration if they belong to the p or q arm:
+
+```{r}
+HNSC_SegmentFiles_Y_p <- HNSC_SegmentFiles_Y[HNSC_SegmentFiles_Y$start > 1 & HNSC_SegmentFiles_Y$end < 10400000, ]
+```
+
+```{r}
+HNSC_SegmentFiles_Y_q <- HNSC_SegmentFiles_Y[HNSC_SegmentFiles_Y$start > 10400001 & HNSC_SegmentFiles_Y$end < 57227415, ]
+```
+
+Calculating chromosome index for these regions:
+
+# Processing of the data:
+
+## Obtaining CNI
+
+Create Sizes for the segments: Chromosome End - Chromosome Star:
+
+```{r}
+HNSC_SegmentFiles_Y_p$Size <- HNSC_SegmentFiles_Y_p$end - HNSC_SegmentFiles_Y_p$start
+```
+
+Look for patients that have more than one sample and cleaning it up:
+
+```{r}
+patients <- split(HNSC_SegmentFiles_Y_p, f = HNSC_SegmentFiles_Y_p$sample )
+```
+
+Giving patients the same ID as other datasets:
+
+```{r}
+name <- names(patients)
+```
+
+```{r}
+duplicated(name) 
+```
+
+### In male patients
+
+Selecting the male patients:
+
+```{r}
+SegmentFiles_Y_p <- HNSC_SegmentFiles_Y_p[HNSC_SegmentFiles_Y_p$sample %in% CPTAC_clinical_HNSSC_male$submitter_id...2,]
+```
+
+Unlogging the segment_mean variable to obtain Copy Number:
+
+```{r}
+SegmentFiles_Y_p$Unlog_Segment <- 2^(1+SegmentFiles_Y_p$log2)
+```
+
+Weighting the segment_mean by the sizes of the segments:
+
+```{r}
+SegmentFiles_Y_p$Weighted_value <- SegmentFiles_Y_p$Unlog_Segment*SegmentFiles_Y_p$Size
+```
+
+Separating the patients in a list in order for the loop to work:
+
+```{r}
+patients_male <- split(SegmentFiles_Y_p, f = SegmentFiles_Y_p$sample )
+```
+
+Loop that calculates the average Copy Number Index per Chromosome inside each patient:
+
+```{r}
+ID <- names(patients_male)
+a <- c(1:22, "X", "Y")
+a <- paste0("chr", a)
+x <- list()
+for (h in (1:length(patients_male))) {
+  vec <- c()
+  for (i in a) {
+    mean <- sum(patients_male[[h]]$Weighted_value[patients_male[[h]]$chromosome %in% i])/sum(patients_male[[h]]$Size[patients_male[[h]]$chromosome %in% i])
+    vec <- c(vec,mean)
+  }
+  names(vec) <- c(1:22, "X", "Y")
+  x[[paste0(ID[h])]] <- vec
+}
+
+```
+
+Unlisting the result to obtain a data frame with the CNI for each Chromosome for each patient:
+
+```{r}
+chrom_male <- do.call(rbind.data.frame, x)
+colnames(chrom_male) <- a
+rownames(chrom_male) <- ID
+```
+
+```{r}
+chrom_male <- chrom_male[,c(-(1:23))]
+```
+
+```{r}
+chrom_male <- as.data.frame(chrom_male)
+rownames(chrom_male) <- ID
+colnames(chrom_male) <- c("Y_p")
+```
+
+
+
+Plotting the CNI for all the Male patients:
+
+```{r}
+den <- density(chrom_male$Y_p)
+plot(den)
+```
+
+```{r}
+chrom_male$ID <- rownames(chrom_male) 
+```
+
+```{r}
+i <- which(chrom_male$Y_p < 1)
+P_Loss <- as.data.frame(chrom_male[i,])
+rownames(P_Loss) <- rownames(chrom_male)[i]
+```
+
+```{r}
+i <- which(CPTAC_clinical_HNSSC_male$submitter_id...2 %in% rownames(P_Loss))
+i
+```
+
+```{r}
+P_Loss <- c(1:length(CPTAC_clinical_HNSSC_male$submitter_id...2))
+P_Loss[i] <- c("Yes")
+P_Loss[-i] <- c("No")
+```
+
+```{r}
+P_Loss <- as.data.frame(P_Loss)
+rownames(P_Loss) <- CPTAC_clinical_HNSSC_male$submitter_id...2
+```
+
+```{r}
+male_ID$P_Loss <- P_Loss
+```
+
+# Processing of the data:
+
+## Obtaining CNI
+
+Create Sizes for the segments: Chromosome End - Chromosome Star:
+
+```{r}
+HNSC_SegmentFiles_Y_q$Size <- HNSC_SegmentFiles_Y_q$end - HNSC_SegmentFiles_Y_q$start
+```
+
+Look for patients that have more than one sample and cleaning it up:
+
+```{r}
+patients <- split(HNSC_SegmentFiles_Y_q, f = HNSC_SegmentFiles_Y_q$sample )
+```
+
+Giving patients the same ID as other datasets:
+
+```{r}
+name <- names(patients)
+```
+
+```{r}
+duplicated(name) 
+```
+
+### In male patients
+
+Selecting the male patients:
+
+```{r}
+SegmentFiles_Y_q <- HNSC_SegmentFiles_Y_q[HNSC_SegmentFiles_Y_q$sample %in% CPTAC_clinical_HNSSC_male$submitter_id...2,]
+```
+
+Unlogging the segment_mean variable to obtain Copy Number:
+
+```{r}
+SegmentFiles_Y_q$Unlog_Segment <- 2^(1+SegmentFiles_Y_q$log2)
+```
+
+Weighting the segment_mean by the sizes of the segments:
+
+```{r}
+SegmentFiles_Y_q$Weighted_value <- SegmentFiles_Y_q$Unlog_Segment*SegmentFiles_Y_q$Size
+```
+
+Separating the patients in a list in order for the loop to work:
+
+```{r}
+patients_male <- split(SegmentFiles_Y_q, f = SegmentFiles_Y_q$sample )
+```
+
+Loop that calculates the average Copy Number Index per Chromosome inside each patient:
+
+```{r}
+ID <- names(patients_male)
+a <- c(1:22, "X", "Y")
+a <- paste0("chr", a)
+x <- list()
+for (h in (1:length(patients_male))) {
+  vec <- c()
+  for (i in a) {
+    mean <- sum(patients_male[[h]]$Weighted_value[patients_male[[h]]$chromosome %in% i])/sum(patients_male[[h]]$Size[patients_male[[h]]$chromosome %in% i])
+    vec <- c(vec,mean)
+  }
+  names(vec) <- c(1:22, "X", "Y")
+  x[[paste0(ID[h])]] <- vec
+}
+
+```
+
+Unlisting the result to obtain a data frame with the CNI for each Chromosome for each patient:
+
+```{r}
+chrom_male <- do.call(rbind.data.frame, x)
+colnames(chrom_male) <- a
+rownames(chrom_male) <- ID
+```
+
+```{r}
+chrom_male <- chrom_male[,c(-(1:23))]
+```
+
+```{r}
+chrom_male <- as.data.frame(chrom_male)
+rownames(chrom_male) <- ID
+colnames(chrom_male) <- c("Y_q")
+```
+
+
+
+Plotting the CNI for all the Male patients:
+
+```{r}
+den <- density(chrom_male$Y_q)
+plot(den)
+```
+
+
+```{r}
+i <- which(chrom_male$Y_q < 1)
+Q_Loss <- as.data.frame(chrom_male[i,])
+rownames(Q_Loss) <- rownames(chrom_male)[i]
+```
+
+```{r}
+i <- which(CPTAC_clinical_HNSSC_male$submitter_id...2 %in% rownames(Q_Loss))
+i
+```
+
+```{r}
+Q_Loss <- c(1:length(CPTAC_clinical_HNSSC_male$submitter_id...2))
+Q_Loss[i] <- c("Yes")
+Q_Loss[-i] <- c("No")
+```
+
+```{r}
+Partial_loss <- P_Loss
+Partial_loss$Y_q <- Q_Loss
+colnames(Partial_loss)[1] <- "Y_p"
+```
+
+```{r}
+Partial_loss$LoY <- CPTAC_clinical_HNSSC_male_LoY$LoY
+```
+
+
+```{r}
+write_csv(Partial_loss, "Q_P_Loss.csv")
+```

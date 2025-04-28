@@ -1,0 +1,91 @@
+---
+title: "Untitled"
+output: html_document
+date: "2022-09-19"
+---
+
+```{r}
+library(reticulate)
+library(SingleCellExperiment)
+library(zellkonverter)
+library(Seurat)
+conda_path = c("/home/c581z/.conda/envs/ikarus")
+use_condaenv(conda_path)
+```
+
+```{r}
+trained_model_path = "https://github.com/BIMSBbioinfo/ikarus/raw/master/tutorials/out/core_model.joblib"
+download.file(trained_model_path, "core_model.joblib")
+```
+
+```{r}
+signatures_path = "https://github.com/BIMSBbioinfo/ikarus/raw/master/tutorials/out/signatures.gmt"
+download.file(signatures_path, "signatures.gmt")
+```
+
+```{r}
+Seurat_Object_Diet <- DietSeurat(seurat_integrated_cells, graphs = "pca")
+sce <- as.SingleCellExperiment(Seurat_Object_Diet)
+```
+
+```{r}
+writeH5AD()
+```
+
+
+```{r}
+## this didn't work properly for me
+library(basilisk)
+adata = basiliskRun(fun = function(sce) {
+     # Convert SCE to AnnData:
+     zellkonverter::SCE2AnnData(sce)
+}, env = conda_path, sce = sce)     
+```
+
+```{r}
+##NOT THIS
+ikarus = import("ikarus")
+model  = ikarus$classifier$Ikarus(
+     
+  signatures_gmt = file.path("signatures.gmt"), 
+  out_dir="ikarus_path"
+)
+model$load_core_model("core_model.joblib")
+
+```
+
+
+```{r}
+class_predict = model$predict(adata, "test")
+```
+
+Then with the h5ad object the rest of the code was run in python. This was done in the terminal after activating the ikarus enviroment (conda activate ikarus), which was set up following the wiki: https://github.com/BIMSBbioinfo/ikarus/blob/master/tutorials/ikarus_reticulate_tutorial.rmd
+
+Wiki for python in following link: https://github.com/BIMSBbioinfo/ikarus/blob/master/tutorials/tutorial.ipynb
+
+```{python}
+import urllib.request
+import anndata
+import pandas as pd
+from pathlib import Path
+from ikarus import classifier, utils, data
+
+
+adata = anndata.read_h5ad("sce.h5ad")
+
+# check that the adata.var contains the gen symbols as a column in this case it had to be renamed:
+df = DataFrame(index = gene_symbol, data =gene_symbol)
+adata.var = df
+
+signatures_path = Path("~/out/signatures.gmt")
+pd.read_csv(signatures_path, sep="\t", header=None)
+
+model_path = Path("out/core_model.joblib")
+# in this case since less than 70% of gene names between the model and the data where corresponding
+# we needed to change the adapt_signatures variable: 
+model = classifier.Ikarus(signatures_gmt=signatures_path, out_dir="out", adapt_signatures=True)
+model.load_core_model(model_path)
+
+_ = model.predict(adata, "HeadNNeck", save=True)
+```
+
